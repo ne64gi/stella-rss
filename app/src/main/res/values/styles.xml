@@ -1,0 +1,16 @@
+<resources>
+    <string name="app_name">Stella RSS</string>
+    <string name="news_widget">Stella RSS · ニュース一覧</string>
+    <string name="compact_widget">Stella RSS · コンパクト</string>
+    <string name="news_description">トップ画像＋最新4件。フィード・色・透明度を個別に設定。</string>
+    <string name="compact_description">最新5件＋More。小さなページ表示をタップして切り替え。</string>
+    <style name="AppTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:colorAccent">#9BD6EC</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:windowBackground">#0B1220</item>
+        <item name="android:navigationBarColor">#0B1220</item>
+        <item name="android:statusBarColor">#0B1220</item>
+    </style>
+</resources>

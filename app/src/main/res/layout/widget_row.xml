@@ -1,0 +1,4 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/row_root" android:layout_width="match_parent" android:layout_height="wrap_content" android:gravity="center_vertical">
+ <TextView android:id="@+id/row_number" android:layout_width="26dp" android:layout_height="wrap_content" android:textSize="10sp" android:textColor="#83C9ED" android:importantForAccessibility="no"/>
+ <TextView android:id="@+id/row_title" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:minHeight="26dp" android:gravity="center_vertical" android:maxLines="1" android:ellipsize="end" android:textColor="#F5F5F5" android:textSize="14sp" android:includeFontPadding="false"/>
+</LinearLayout>

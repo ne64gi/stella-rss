@@ -1,0 +1,7 @@
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/card_root" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="horizontal" android:gravity="center_vertical">
+ <ImageView android:id="@+id/card_image" android:layout_width="56dp" android:layout_height="56dp" android:layout_marginEnd="10dp" android:scaleType="centerCrop" android:src="@drawable/image_fallback" android:importantForAccessibility="no"/>
+ <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
+  <TextView android:id="@+id/card_dots" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginBottom="5dp" android:textColor="#83C9ED" android:textSize="10sp" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+  <TextView android:id="@+id/card_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:maxLines="3" android:ellipsize="end" android:breakStrategy="balanced" android:textColor="#F5F5F5" android:textSize="15sp" android:textStyle="bold" android:includeFontPadding="false"/>
+ </LinearLayout>
+</LinearLayout>

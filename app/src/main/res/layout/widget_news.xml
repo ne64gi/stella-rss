@@ -1,0 +1,22 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent">
+ <ImageView android:id="@android:id/background" android:clipToOutline="true" android:outlineProvider="bounds" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_background_16" android:tint="#242629" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+ <ImageView android:id="@+id/widget_border" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_border_16" android:visibility="gone" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+ <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
+  <LinearLayout android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical">
+   <TextView android:id="@+id/brand" android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:text="STELLA / NEWS" android:textSize="10sp" android:textColor="#A8B0B8" android:letterSpacing="0.1" android:maxLines="1" android:ellipsize="end"/>
+   <TextView android:id="@+id/refresh" android:layout_width="32dp" android:layout_height="match_parent" android:gravity="center" android:text="↻" android:textSize="16sp" android:includeFontPadding="false" android:textColor="#A8B0B8" android:contentDescription="記事を更新"/>
+   <TextView android:id="@+id/configure" android:layout_width="32dp" android:layout_height="match_parent" android:gravity="center" android:text="⋯" android:textSize="16sp" android:includeFontPadding="false" android:textColor="#A8B0B8" android:contentDescription="このウィジェットの設定"/>
+  </LinearLayout>
+  <LinearLayout android:id="@+id/hero" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:gravity="center_vertical" android:orientation="horizontal">
+   <ImageView android:id="@+id/hero_image" android:layout_width="80dp" android:layout_height="80dp" android:layout_marginEnd="10dp" android:scaleType="centerCrop" android:src="@drawable/image_fallback" android:importantForAccessibility="no"/>
+   <LinearLayout android:layout_width="0dp" android:layout_weight="1" android:layout_height="wrap_content" android:orientation="vertical">
+    <TextView android:id="@+id/hero_kicker" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="TOP STORY" android:textSize="9sp" android:textColor="#83C9ED" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+    <TextView android:id="@+id/hero_title" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="4dp" android:maxLines="3" android:ellipsize="end" android:breakStrategy="balanced" android:text="フィードを追加してください" android:textSize="15sp" android:textColor="#F5F5F5" android:textStyle="bold" android:includeFontPadding="false"/>
+    <TextView android:id="@+id/hero_meta" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="5dp" android:textSize="10sp" android:textColor="#A8B0B8" android:maxLines="1" android:ellipsize="end" android:includeFontPadding="false"/>
+   </LinearLayout>
+  </LinearLayout>
+  <ImageView android:id="@+id/rule" android:layout_width="match_parent" android:layout_height="1dp" android:layout_marginTop="4dp" android:layout_marginBottom="4dp" android:background="#3D4146" android:importantForAccessibility="no"/>
+  <LinearLayout android:id="@+id/headlines" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical"/>
+  <TextView android:id="@+id/more" android:layout_width="match_parent" android:layout_height="24dp" android:gravity="end|center_vertical" android:text="More news  ↗" android:textSize="10sp" android:textColor="#A8B0B8" android:maxLines="1" android:ellipsize="end" android:contentDescription="More news リーダーを開く"/>
+ </LinearLayout>
+</FrameLayout>

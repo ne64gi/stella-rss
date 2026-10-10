@@ -1,0 +1,11 @@
+<resources>
+    <item name="reader_drawer" type="id" />
+    <item name="article_list" type="id" />
+    <item name="article_title" type="id" />
+    <item name="folder_tree" type="id" />
+    <item name="reading_web" type="id" />
+    <item name="reading_settings" type="id" />
+    <item name="reading_previous" type="id" />
+    <item name="reading_next" type="id" />
+    <item name="reading_original" type="id" />
+</resources>

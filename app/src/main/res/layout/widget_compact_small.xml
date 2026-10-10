@@ -1,0 +1,10 @@
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent">
+ <FrameLayout android:id="@+id/widget_panel" android:layout_width="match_parent" android:layout_height="96dp" android:layout_gravity="center_vertical">
+  <ImageView android:id="@android:id/background" android:clipToOutline="true" android:outlineProvider="bounds" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_background_16" android:tint="#242629" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+  <ImageView android:id="@+id/widget_border" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_border_16" android:visibility="gone" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+  <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="8dp">
+   <ViewFlipper android:id="@+id/cards" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1" android:autoStart="false"/>
+   <LinearLayout android:id="@+id/widget_pages" android:layout_width="168dp" android:layout_height="20dp" android:layout_gravity="center_horizontal" android:gravity="center" android:orientation="horizontal"/>
+  </LinearLayout>
+ </FrameLayout>
+</FrameLayout>

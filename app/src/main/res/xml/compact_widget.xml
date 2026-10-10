@@ -1,0 +1,7 @@
+<appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
+    android:minWidth="260dp" android:minHeight="120dp" android:minResizeWidth="200dp" android:minResizeHeight="96dp"
+    android:targetCellWidth="3" android:targetCellHeight="1" android:resizeMode="horizontal|vertical"
+    android:updatePeriodMillis="0" android:initialLayout="@layout/widget_compact"
+    android:description="@string/compact_description" android:previewLayout="@layout/widget_compact"
+    android:configure="net.fuyumori.stellarss.WidgetConfigActivity"
+    android:widgetCategory="home_screen" android:widgetFeatures="reconfigurable"/>
