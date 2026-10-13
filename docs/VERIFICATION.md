@@ -40,7 +40,7 @@
 
 - Implemented: RSS/Atom body/summary persistence, safe HTML reader, horizontal previous/next, stable selection queue, independent display settings, explicit original link.
 - JVM 37 passed (Parser15, Repository7, Organization5, Migration3, ArticleReader7); lint 0 errors / 88 warnings. Main and test APK build succeeded. Initial instrumentation compilation error (MotionEvent metaState argument) fixed.
-- Installed on SOG06 Android14/API34 (`DEVICE_IP:ADB_PORT`) with existing app data retained.
+- Installed on SOG06 Android14/API34 with existing app data retained.
 - Native backend 3 passed, 99.551s: BBC28 / Atom25 / JPCERT21; actual Room/ETag/304/read/image fallback/cache; production refresh of all 16 existing subscriptions.
 - After migration schema3→4 and refresh: 16 feeds, 6 folders, 16 memberships, 418 articles (415 before), 60 with body HTML. All16 feeds have contentVersion1 and no fetch error. Existing feed settings, folder/membership content, widget selection/custom glass appearance, preferences, and all415 old read/bookmark hashes preserved.
 - JPCERT has both body-bearing and summary/missing-body entries. DTM currently provides summary only; planned live full-RSS UI coverage uses CAPA, plus Android Developers Atom and BBC summary.
@@ -52,8 +52,8 @@
 Resume UI validation on an unlocked device:
 
 ```sh
-adb -s DEVICE_IP:ADB_PORT install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb -s DEVICE_IP:ADB_PORT shell am instrument -w -e class 'net.fuyumori.stellarss.ArticleReadingChecks,net.fuyumori.stellarss.ReaderChecks,net.fuyumori.stellarss.DeviceChecks#standardHostRenderingUpdateIndependentSettingsAndGestures' net.fuyumori.stellarss.test/androidx.test.runner.AndroidJUnitRunner
+adb -s 'DEVICE_IP:ADB_PORT' install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s 'DEVICE_IP:ADB_PORT' shell am instrument -w -e class 'net.fuyumori.stellarss.ArticleReadingChecks,net.fuyumori.stellarss.ReaderChecks,net.fuyumori.stellarss.DeviceChecks#standardHostRenderingUpdateIndependentSettingsAndGestures' net.fuyumori.stellarss.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 Review native article screenshots from the app-private `files/article-*.png` under ignored verification-local only. Remove only test-owned fixture data/test APK after validation. Existing user feeds/settings and StellaShell must remain untouched.
@@ -90,7 +90,7 @@ First build failed only lint WrongConstant on line-break constant; fixed before 
 - ニュース一覧を小さな左サムネイル＋右最大3行見出し＋4行＋小Moreへ再設計。コンパクトは低い横長カードへ変更し、管理ボタンを撤去。
 - ダーク98% / ガラス48%＋細い縁 / 紙 / 森のプリセット、色・透過・文字・角丸0/8/16/24dpをウィジェットごとに設定。0%では縁も非表示。画像と補助情報はサイズに応じて調整。
 - Room v1→v2はcornerDp追加と完全一致の旧初期配色だけ移行。独自配色・Feed・既読・表示対象を維持。破壊的migrationなし。
-- **Sony SOG06 / Android 14 / API34 / DEVICE_IP:ADB_PORTへ上書きインストール済み**。StellaShell本体・端末設定・既存ホーム配置は変更しない。
+- **Sony SOG06 / Android 14 / API34へ上書きインストール済み**。StellaShell本体・端末設定・既存ホーム配置は変更しない。
 
 ## 検証結果
 
@@ -139,7 +139,7 @@ First build failed only lint WrongConstant on line-break constant; fixed before 
 - `testDebugUnitTest`: **16件成功、失敗/エラー/skip 0**。
 - `lintDebug`: **エラー0、警告46**。主に依存更新案内、KTX/KSP推奨、日本語文字列、旧APIで無視される新widget属性、小さいインジケーター。
 - debug本体・AndroidTest APKをビルド。SOG06への上書きインストール成功（新規作成したこのアプリのみ）。
-- 端末: **Sony SOG06 / Android 14 / API 34 / DEVICE_IP:ADB_PORT**。当初指定 .1 は拒否、ユーザーが .4 へ訂正。
+- 端末: **Sony SOG06 / Android 14 / API 34**。接続先は公開記録に含めません。
 
 ## ローカル試験
 

@@ -64,19 +64,13 @@ APK: `app/build/outputs/apk/debug/app-debug.apk`。パッケージ: `net.fuyumor
 
 [Android checks](.github/workflows/android-checks.yml) は、このリポジトリのpush／Pull Requestでunit・lint・APKビルドを実行します。実機テストやAPK公開は行いません。
 
-この開発環境では既存のSDK/JDK入りコンテナを使えます：
+実機確認では、自分の端末のIPアドレスとADBポートを指定してください。以下の `DEVICE_IP:ADB_PORT` は実行前に置き換えてください。
 
 ```sh
-<LOCAL_HOME>/android-dev/android-build --project "$PWD" :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest
-```
-
-ユーザーが訂正した実機接続先は `DEVICE_IP:ADB_PORT`（Sony SOG06）。当初の `.1:5555` ではありません。
-
-```sh
-adb connect DEVICE_IP:ADB_PORT
-adb -s DEVICE_IP:ADB_PORT install -r app/build/outputs/apk/debug/app-debug.apk
-adb -s DEVICE_IP:ADB_PORT install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb -s DEVICE_IP:ADB_PORT shell am instrument -w net.fuyumori.stellarss.test/androidx.test.runner.AndroidJUnitRunner
+adb connect 'DEVICE_IP:ADB_PORT'
+adb -s 'DEVICE_IP:ADB_PORT' install -r app/build/outputs/apk/debug/app-debug.apk
+adb -s 'DEVICE_IP:ADB_PORT' install -r app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
+adb -s 'DEVICE_IP:ADB_PORT' shell am instrument -w net.fuyumori.stellarss.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 画面操作試験にはロック解除済みの実機が必要です。端末設定の書換え、既存アプリのデータ削除、ホーム選択変更は行いません。実機テストのAppWidgetHostは独立のdebug専用Activityを使い、自分が割り当てたwidget IDと合成fixtureだけを後片付けします。
