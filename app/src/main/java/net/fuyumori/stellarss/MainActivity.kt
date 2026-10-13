@@ -18,11 +18,13 @@ import androidx.drawerlayout.widget.DrawerLayout
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import androidx.lifecycle.withResumed
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import androidx.recyclerview.widget.DiffUtil
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.ListAdapter
 import androidx.recyclerview.widget.RecyclerView
+import androidx.recyclerview.widget.ItemTouchHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
@@ -43,6 +45,10 @@ class MainActivity : Screen() {
     private lateinit var scopeTab: TextView
     private lateinit var drawer: DrawerLayout
     private lateinit var tree: LibraryDrawer
+    private lateinit var refresh: ArticleRefreshLayout
+    private var manualState: WorkInfo.State? = null
+    private var undoMillis = 8000L
+    private var markingAll = false
     private val organization by lazy { Organization(rss.db) }
     private val importDocument = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) lifecycleScope.launch {
@@ -84,7 +90,8 @@ class MainActivity : Screen() {
         status = label("すべての記事", 11f, MUTED).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END }
         words.addView(status)
         toolbar.addView(words, LinearLayout.LayoutParams(0, -2, 1f))
-        toolbar.addView(iconButton("↻", "フィードを更新") { Updates.refresh(this); toast("更新を予約しました") })
+        toolbar.addView(iconButton("✓", "すべて既読にする（選択中の範囲）") { markAllRead() }.apply { id = R.id.article_mark_all_read })
+        toolbar.addView(iconButton("↻", "フィードを更新") { requestRefresh() })
         toolbar.addView(iconButton("⋮", "設定と管理") { settingsMenu() })
         content.addView(toolbar, LinearLayout.LayoutParams(-1, dp(60)))
         val tabs = row().apply { setPadding(dp(16), 0, dp(16), 0) }
@@ -102,15 +109,69 @@ class MainActivity : Screen() {
         content.addView(tabs, LinearLayout.LayoutParams(-1, dp(48)))
         content.addView(View(this).apply { setBackgroundColor(DIVIDER) }, LinearLayout.LayoutParams(-1, dp(1)))
         empty = label("記事を読み込み中…", 15f, MUTED).apply { gravity = Gravity.CENTER; setPadding(dp(24), dp(32), dp(24), dp(32)) }
-        content.addView(empty)
         articles = ArticleAdapter(this)
-        content.addView(RecyclerView(this).apply {
+        val list = RecyclerView(this).apply {
             id = R.id.article_list; layoutManager = LinearLayoutManager(this@MainActivity); adapter = articles
-            itemAnimator = null; clipToPadding = false; setPadding(dp(16), 0, dp(16), dp(8))
-        }, LinearLayout.LayoutParams(-1, 0, 1f))
+            // Read/save updates should be immediate; don't leave duplicate fading rows.
+            itemAnimator = null
+            clipToPadding = false; setPadding(dp(16), 0, dp(16), dp(8))
+        }
+        refresh = ArticleRefreshLayout(this).apply {
+            id = R.id.article_refresh
+            setColorSchemeColors(ACCENT); setProgressBackgroundColorSchemeColor(SURFACE)
+            setOnChildScrollUpCallback { _, _ -> list.canScrollVertically(-1) || drawer.isDrawerVisible(Gravity.LEFT) }
+            setOnRefreshListener { requestRefresh() }
+            addView(FrameLayout(this@MainActivity).apply {
+                addView(list, FrameLayout.LayoutParams(-1, -1))
+                addView(empty, FrameLayout.LayoutParams(-1, -2, Gravity.TOP))
+            })
+        }
+        content.addView(refresh, LinearLayout.LayoutParams(-1, 0, 1f))
+        val undoBar = row().apply { visibility = View.GONE; setBackgroundColor(SURFACE); setPadding(dp(16), dp(4), dp(4), dp(4)) }
+        val undoMessage = label("", 13f).apply { accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE; maxLines = 2 }
+        undoBar.addView(undoMessage, LinearLayout.LayoutParams(0, -2, 1f))
+        val undoButton = label("元に戻す", 14f, ACCENT).apply {
+            id = R.id.article_undo; gravity = Gravity.CENTER; isClickable = true; isFocusable = true
+            setPadding(dp(16), 0, dp(16), 0)
+        }
+        undoBar.addView(undoButton, LinearLayout.LayoutParams(-2, dp(48)))
+        content.addView(undoBar)
+        val accessibility = getSystemService(android.view.accessibility.AccessibilityManager::class.java)
+        undoMillis = if (android.os.Build.VERSION.SDK_INT >= 29) accessibility.getRecommendedTimeoutMillis(8000,
+            android.view.accessibility.AccessibilityManager.FLAG_CONTENT_TEXT or android.view.accessibility.AccessibilityManager.FLAG_CONTENT_CONTROLS).toLong() else 8000L
+        var resetSwipe: () -> Unit = {}
+        val swipeCallback = ArticleSwipeCallback(this) { holder, direction ->
+            val id = (holder as ArticleAdapter.Holder).articleId ?: return@ArticleSwipeCallback
+            // Capture identity before an unread filter/Room diff can move or remove this row.
+            appScope.launch {
+                try {
+                    val changed = rss.swipeArticle(id, direction == ItemTouchHelper.LEFT, undoMillis)
+                    if (!changed) withContext(Dispatchers.Main) { if (!isDestroyed) toast(if (direction == ItemTouchHelper.LEFT) "すでに既読です" else "保存済みです") }
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    withContext(Dispatchers.Main) { if (!isDestroyed) toast("変更を保存できませんでした") }
+                } finally {
+                    // In All/Saved the row stays; even an already-read/saved swipe must snap back.
+                    withContext(NonCancellable + Dispatchers.Main) {
+                        if (!isDestroyed) list.post {
+                            // This is an action, not a dismiss: retained rows must leave
+                            // ItemTouchHelper's pending-dismiss state even after a no-op.
+                            resetSwipe()
+                            val position = articles.currentList.indexOfFirst { it.article.id == id }
+                            if (position >= 0) articles.notifyItemChanged(position)
+                        }
+                    }
+                }
+            }
+        }
+        var touchHelper = ItemTouchHelper(swipeCallback).also { it.attachToRecyclerView(list) }
+        resetSwipe = {
+            touchHelper.attachToRecyclerView(null)
+            touchHelper = ItemTouchHelper(swipeCallback).also { it.attachToRecyclerView(list) }
+        }
         tree = LibraryDrawer(this, { kind, id ->
             scope = kind; scopeId = id; refreshQuery(); drawer.closeDrawer(Gravity.LEFT)
-        }, { addFeed() }, { launchImport() }, { exportDocument.launch("stella-rss.opml") })
+        }, { folder -> addFeed(folder) }, { launchImport() }, { exportDocument.launch("stella-rss.opml") })
         drawer.addView(tree.view, DrawerLayout.LayoutParams(dp(320).coerceAtMost(resources.displayMetrics.widthPixels - dp(40)), -1, Gravity.LEFT))
         val back = object : OnBackPressedCallback(false) { override fun handleOnBackPressed() { drawer.closeDrawer(Gravity.LEFT) } }
         onBackPressedDispatcher.addCallback(this, back)
@@ -118,7 +179,31 @@ class MainActivity : Screen() {
             override fun onDrawerOpened(view: View) { back.isEnabled = true }
             override fun onDrawerClosed(view: View) { back.isEnabled = false }
         })
+        WorkManager.getInstance(this).getWorkInfosForUniqueWorkLiveData("manual-feed").observe(this) { work ->
+            manualState = work.firstOrNull { !it.state.isFinished }?.state
+            showStatus()
+        }
         lifecycleScope.launch { repeatOnLifecycle(Lifecycle.State.STARTED) {
+            launch { rss.swipeUndo.collectLatest { action ->
+                val remaining = (action?.expiresAt ?: 0) - android.os.SystemClock.elapsedRealtime()
+                undoBar.visibility = if (remaining > 0) View.VISIBLE else View.GONE
+                if (action != null && remaining > 0) {
+                    undoMessage.text = if (action.readAction) "${action.ids.size}件を既読にしました" else "あとで読むに移しました"
+                    undoButton.isEnabled = true
+                    undoButton.setOnClickListener {
+                        undoButton.isEnabled = false
+                        appScope.launch {
+                            try { rss.undoSwipe(action) }
+                            catch (e: Exception) {
+                                if (e is CancellationException) throw e
+                                withContext(Dispatchers.Main) { if (!isDestroyed) { toast("元に戻せませんでした"); undoButton.isEnabled = true } }
+                            }
+                        }
+                    }
+                    delay(remaining)
+                }
+                if (action != null) rss.dismissSwipeUndo(action)
+            } }
             launch {
                 combine(rss.store.watchFeeds(), rss.store.watchFolders(), rss.store.watchMemberships(), rss.store.watchUnread()) {
                     feeds, folders, links, counts -> Library(feeds, folders, links, counts)
@@ -152,16 +237,37 @@ class MainActivity : Screen() {
     }
     private fun showStatus() {
         val count = library.count(if (query.value.all) null else query.value.ids.toSet())
-        status.text = if (rss.refreshing.value) "${selectionName()} · 更新中…" else if (scope == "saved") "あとで読む · $savedCount 件" else "${selectionName()} · $count 件未読"
+        val running = rss.refreshing.value || manualState == WorkInfo.State.RUNNING
+        refresh.isRefreshing = running
+        status.text = if (running) "${selectionName()} · 更新中…" else if (manualState == WorkInfo.State.ENQUEUED || manualState == WorkInfo.State.BLOCKED) "${selectionName()} · 更新待ち（接続・実行待ち）" else if (scope == "saved") "あとで読む · $savedCount 件" else "${selectionName()} · $count 件未読"
         empty.visibility = if (allRows.isEmpty()) View.VISIBLE else View.GONE
-        empty.text = if (library.feeds.isEmpty()) "左上の ☰ からフィードを追加、またはOPMLを読み込めます。" else if (scope == "saved") "記事を長押しして「あとで読む」に保存できます。" else if (unread) "未読記事はありません。" else "表示できる記事がありません。フィードの選択や購読状態を確認してください。"
+        empty.text = if (library.feeds.isEmpty()) "左上の ☰ からフィードを追加、またはOPMLを読み込めます。" else if (scope == "saved") "記事を右へスワイプ、または長押しして「あとで読む」に保存できます。" else if (unread) "未読記事はありません。下に引くと更新できます。" else "表示できる記事がありません。フィードの選択や購読状態を確認してください。"
     }
-    private fun addFeed() { startActivity(Intent(this, FeedActivity::class.java).putExtra("add", true).putExtra("folder", if (scope == "folder") scopeId else 0)) }
+    private fun requestRefresh() {
+        if (!rss.refreshing.value) Updates.refresh(this)
+        // Only spin during execution, never indefinitely while offline or waiting for retry.
+        showStatus()
+    }
+    private fun markAllRead() {
+        if (markingAll) return
+        val selected = query.value // Never let a subsequent folder change alter this command.
+        markingAll = true
+        appScope.launch {
+            try {
+                val count = rss.markAllRead(selected.ids, selected.all, selected.saved, undoMillis)
+                if (count == 0) withContext(Dispatchers.Main) { if (!isDestroyed) toast("この範囲に未読記事はありません") }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                withContext(Dispatchers.Main) { if (!isDestroyed) toast("既読状態を保存できませんでした") }
+            } finally { withContext(NonCancellable + Dispatchers.Main) { markingAll = false } }
+        }
+    }
+    private fun addFeed(folder: Long?) { startActivity(Intent(this, FeedActivity::class.java).putExtra("add", true).putExtra("folder", folder ?: 0L)) }
     private fun launchImport() { importDocument.launch(arrayOf("text/*", "application/xml", "application/octet-stream", "application/x-opml+xml")) }
     private fun settingsMenu() {
-        AlertDialog.Builder(this).setTitle("設定と管理").setItems(arrayOf("フィードを管理", "ウィジェット", "更新間隔", "OPMLを読み込む", "OPMLを書き出す")) { _, item ->
+        AlertDialog.Builder(this).setTitle(selectionName()).setItems(arrayOf("すべて既読にする", "ウィジェット", "更新間隔", "OPMLを読み込む", "OPMLを書き出す")) { _, item ->
             when (item) {
-                0 -> startActivity(Intent(this, FeedActivity::class.java))
+                0 -> markAllRead()
                 1 -> widgetsMenu(); 2 -> intervalDialog(); 3 -> launchImport(); 4 -> exportDocument.launch("stella-rss.opml")
             }
         }.show()
@@ -194,9 +300,9 @@ private class ArticleAdapter(val screen: MainActivity) : ListAdapter<ArticleRow,
     override fun areItemsTheSame(a: ArticleRow, b: ArticleRow) = a.article.id == b.article.id
     override fun areContentsTheSame(a: ArticleRow, b: ArticleRow) = a == b
 }) {
-    class Holder(val panel: LinearLayout, val image: ImageView, val source: TextView, val title: TextView, val summary: TextView) : RecyclerView.ViewHolder(panel) { var job: Job? = null }
+    class Holder(val panel: LinearLayout, val image: ImageView, val source: TextView, val title: TextView, val summary: TextView) : RecyclerView.ViewHolder(panel) { var job: Job? = null; var articleId: String? = null }
     override fun onCreateViewHolder(parent: ViewGroup, type: Int): Holder {
-        val panel = screen.column().apply { layoutParams = RecyclerView.LayoutParams(-1, -2) }
+        val panel = screen.column().apply { layoutParams = RecyclerView.LayoutParams(-1, -2); setBackgroundColor(0xFF0B1220.toInt()) }
         val line = screen.row().apply { setPadding(0, screen.dp(11), 0, screen.dp(11)); minimumHeight = screen.dp(106) }
         val words = screen.column()
         val source = screen.label("", 10f, ACCENT).apply { maxLines = 1; ellipsize = TextUtils.TruncateAt.END; includeFontPadding = false }
@@ -217,7 +323,7 @@ private class ArticleAdapter(val screen: MainActivity) : ListAdapter<ArticleRow,
         return Holder(panel, image, source, title, summary)
     }
     override fun onBindViewHolder(holder: Holder, position: Int) {
-        val row = getItem(position); holder.job?.cancel(); holder.panel.tag = "article:${row.article.id}"
+        val row = getItem(position); holder.job?.cancel(); holder.articleId = row.article.id; holder.panel.tag = "article:${row.article.id}"
         holder.title.text = row.article.title; holder.title.setTypeface(null, if (row.article.read) Typeface.NORMAL else Typeface.BOLD)
         holder.title.setTextColor(if (row.article.read) MUTED else INK)
         holder.source.text = "${if (row.article.bookmarked) "☆ " else if (!row.article.read) "• " else ""}${row.feedName} · ${DateUtils.getRelativeTimeSpanString(row.article.published)}"

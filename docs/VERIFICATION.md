@@ -1,3 +1,41 @@
+# 2026-10-11 Stella RSS 0.3.3 — sidebar management and direct folder subscriptions
+
+- Replaced the large feed-card management list with a compact, searchable library tree and a single-subscription detail form. RSS/folder icons, muted counts, separate disclosure arrows, contextual edit/move/multiple-classification/delete, one top add entry; long-press drag retained.
+- Folder menu → **このフォルダにフィードを追加**; top **＋** inherits the selected folder. Destination is visible/changeable in the form. Subscription + membership save atomically; an existing URL adds a classification without overwriting settings/articles. A deleted destination cannot leave an orphan subscription.
+- Main/test APK builds passed. JVM **43 passed**, lint **0 errors / 81 warnings**. Final APK `3bd9cec7bf421a4f83d5d12736b6e1cca1b1b5820151d699c4a35221e1a200d4` installed with `-r` on Sony SOG06/API34; installed hash matches.
+- **LibraryManagementChecks: 2 passed, 27.61s** on the final APK. 60 fixture feeds/scroll, long-name ellipsis, search with ancestor paths/no matches, 3-level hierarchy, disclosure vs selection, direct folder add, selected-folder plus, details, delete cancel/confirm, actual injected long-press drag preserving other memberships, draft/destination across Activity recreation and cancellation without saving. Native tree/search/add/delete screenshots visually reviewed.
+- All 17 existing feed settings, 6 folders/17 memberships, preferences and widget117 glass65% configuration retained exactly. All 511 pre-existing article read/bookmark row hashes retained; normal refresh added 6 articles (517 total). One bookmark/one widget retained; Room stays v4. Fixtures cleaned; test APK removed; main retained. No device setting, StellaShell modification, commit or push.
+- Initial JVM fixture lacked WorkManager initialization. Native fixtures initially operated a closed drawer and timed out before serialized refresh/deletion finished. Corrected visibility/window synchronization and refresh-aware timeout; retained failed logs separately, not counted as final passes. Confirmed deletes now use app scope (survive Activity recreation) and announce waiting behind refresh.
+- Reused unchanged parser/article/Undo/widget evidence; this does not close the earlier full row-swipe regression or lift standard AppWidget horizontal-swipe/OEM/API limits. Save/delete remain serialized behind an ongoing refresh. Private screenshots stay in ignored `verification-local/library-ui/`.
+
+---
+
+# 2026-10-11 Stella RSS 0.3.2 — scoped mark-all-read and separate Saved inbox
+
+- Added toolbar ✓ and overflow “すべて既読にする”. Applies to all matching unread articles in the current feed/folder (including descendants), all feeds, or Saved. No 1,000-row display limit; chunked transactional ID updates; empty folders never become global selections.
+- Saved articles no longer appear in ordinary All/Unread/feed/folder lists or their unread counters. Removing Save restores them without changing read status. Widget filtering is unchanged.
+- Undo restores only IDs changed by that command; existing read/bookmark state and later arrivals are preserved. Refresh pruning is deferred during the read Undo window. No schema migration (Room remains v4).
+- Final APK SHA-256 `6492b0f77440d15eceedad370c968090abbd43ca9aa6ad982b7ef9d14ad86766`, installed with `-r` on Sony SOG06/API34; installed SHA matches. Build **3m41s**, JVM **41 passed**, lint **0 errors / 91 warnings**.
+- **BulkReadChecks passed on final APK**: recursive/deduplicated folder scope, pre-read/outside/saved preservation, unread list empty after bulk, Undo after recreation, actual Saved removal menu and inbox return, muted read styling and native screenshot reviewed. 1,205-row / refresh-during-Undo / new arrival behavior covered by Room tests.
+- Before/after final install and native tests: 17 subscriptions, 441 articles, 6 folders, 17 memberships, 1 bookmark, 1 widget. Exact row hashes for read/bookmark state, feed settings, organization, widget configuration and preferences preserved. No user-data clear, device settings or StellaShell modifications.
+- Gesture regression remains a separate pending check: the test-only window flag update made instrumentation input untouchable; switched to View.keepScreenOn. A default null Typeface is valid normal text, not a styling failure. Saved Undo can restore a row above the retained viewport, so native swipe checks now locate and scroll to the actual article ID before injecting input. Physical `sec_touchscreen` input also collided with injected events. Final test-only build passed (59s), but the full swipe run awaits a quiet device window; mixed runs are **not** reported as all-green. Test APK removed; main app retained.
+- Screenshots are ignored local artifacts, not published evidence. Changes are not committed or pushed.
+
+---
+
+# 2026-10-11 Stella RSS 0.3.1 — pull refresh, row actions, Undo, article rendering fix
+
+- Implemented: pull-to-refresh at the top/empty list; left swipe marks read, right swipe saves, without toggling. Bottom Undo restores the last changed field for 8 seconds (accessibility timeout respected), survives Activity recreation, and restores rows in unread selection. Refresh execution/queued states are distinct.
+- Fixed the article reader's blanket request denial: the exact current document is served as in-memory HTML, mapped images still use the native cache, and all other resources/navigation remain blocked. No JavaScript or publisher page is loaded automatically.
+- Final main APK `810f7ec48ce0b3ab0f791e832189d1e5b2dbff33beaea755099c81005891f48d` installed with `-r` on Sony SOG06/API34. JVM **39 passed**, lint **0 errors / 91 warnings**, debug main/test APK build successful.
+- Article UI verified on device: JPCERT/CC (short body), BBC (summary/image), CAPA (full RSS body), Android Developers (Atom content), dark/light/settings, real horizontal next/previous and vertical scrolling, recreation/scroll/order/Back. Two focused native checks passed in 29.833s. Native Chromium text search also proved the actual cached document rendered without fetching original/script URLs. Article-rendering code is identical in the final APK.
+- Reader/tree/D&D/OPML/counts, unread selection → reader → Back, and standard widget → reader → explicit original browser flow passed in the earlier 4-success subset on the same reader/repository code before Undo. These are not claimed as a single all-green run: initial fixture assumptions and lock/timing failures were investigated separately.
+- Physical list testing found a retained swiped holder staying off-screen with `itemAnimator=null`. Fixed by bounded DefaultItemAnimator change animation plus explicit item rebind, including no-op repeated swipes. **Final row-swipe/Undo/pull regression pending at this checkpoint.**
+- Original data retained across both earlier installs: all431 existing article read/bookmark row hashes,16 feed settings,6 folders/16 memberships, widget111's custom glass76%, preferences and Room schema4. No app data clear, device setting change, StellaShell edit, or home-widget rearrangement.
+- Private/fixture screenshots remain under ignored `verification-local/`, not this repository's tracked documents. Standard AppWidget horizontal-swipe limitation, glass-without-blur, other OEM/API and elapsed Doze scheduling limitations are unchanged.
+
+---
+
 # 2026-10-10 Stella RSS 0.3.0 — in-app article reading (UI verification pending)
 
 - Implemented: RSS/Atom body/summary persistence, safe HTML reader, horizontal previous/next, stable selection queue, independent display settings, explicit original link.

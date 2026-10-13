@@ -1,6 +1,9 @@
 <resources>
     <item name="reader_drawer" type="id" />
     <item name="article_list" type="id" />
+    <item name="article_refresh" type="id" />
+    <item name="article_undo" type="id" />
+    <item name="article_mark_all_read" type="id" />
     <item name="article_title" type="id" />
     <item name="folder_tree" type="id" />
     <item name="reading_web" type="id" />
@@ -8,4 +11,14 @@
     <item name="reading_previous" type="id" />
     <item name="reading_next" type="id" />
     <item name="reading_original" type="id" />
+    <item name="library_search" type="id" />
+    <item name="library_add" type="id" />
+    <item name="feed_name" type="id" />
+    <item name="feed_url" type="id" />
+    <item name="feed_destination" type="id" />
+    <item name="feed_save" type="id" />
+    <item name="feed_enabled" type="id" />
+    <item name="feed_widgets" type="id" />
+    <item name="feed_images" type="id" />
+    <item name="feed_summary" type="id" />
 </resources>

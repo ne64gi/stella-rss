@@ -36,6 +36,7 @@ class ArticleReadingChecks {
     private fun page(s: ActivityScenario<OpenArticleActivity>, id: String) {
         s.onActivity { it.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         waitFor("Article $id displayed") { var ok = false; s.onActivity { ok = it.currentArticleId == id && it.displayedPage != null }; ok }
+        waitFor("Reader window ready") { var ready = false; s.onActivity { ready = it.hasWindowFocus() && it.findViewById<WebView>(R.id.reading_web).progress == 100 }; ready }
         waitFor("Article marked read") { runBlocking { store.article(id)?.read == true } }
     }
     private fun contains(node: android.view.accessibility.AccessibilityNodeInfo?, text: String): Boolean {
@@ -52,6 +53,7 @@ class ArticleReadingChecks {
         }
     }
     private fun gesture(x: Float, y: Float, toX: Float, toY: Float) {
+        ins.waitForIdleSync(); SystemClock.sleep(250)
         val start = SystemClock.uptimeMillis()
         fun send(action: Int, px: Float, py: Float) {
             val e = MotionEvent.obtain(start, SystemClock.uptimeMillis(), action, px, py, 0)
@@ -82,6 +84,40 @@ class ArticleReadingChecks {
         assertTrue(latch.await(5, TimeUnit.SECONDS)); assertEquals(android.view.PixelCopy.SUCCESS, code)
         File(context.filesDir, name).outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }; bitmap.recycle()
     }
+    @Test fun cachedBodyRendersInNativeWebViewWithoutPublisherRequest() = runBlocking {
+        val token = System.nanoTime()
+        val feed = store.add(Feed(name = "Cached reader check", url = "https://example.org/cached-$token", enabled = false, showImages = false))
+        val id = "cached-reading-$token"
+        val server = MockWebServer(); server.start()
+        val oldSettings = store.preference(ReaderSettings.KEY)
+        var scenario: ActivityScenario<OpenArticleActivity>? = null
+        try {
+            store.save(Preference(ReaderSettings.KEY, ReaderSettings(images = false).encode()))
+            store.insert(Article(id, feed, "Local document regression", server.url("/unreachable-original").toString(), "概要のみ", System.currentTimeMillis(),
+                bodyHtml = "<h2>Cached body regression marker</h2><p>保存済みの本文を表示しています。</p><script src='${server.url("/script")}'></script>"))
+            scenario = ActivityScenario.launch(Intent(context, OpenArticleActivity::class.java).putExtra("article", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            val active = scenario
+            page(active, id)
+            // Native Chromium text search inspects the loaded document, not displayedPage's input HTML.
+            // This works even when keyguard prevents accessibility/physical-touch verification.
+            val matches = java.util.concurrent.atomic.AtomicInteger(0)
+            active.onActivity { it.findViewById<WebView>(R.id.reading_web).setFindListener { _, count, done -> if (done) matches.set(count) } }
+            waitFor("Cached body is in actual WebView document, not an error page") {
+                active.onActivity { it.findViewById<WebView>(R.id.reading_web).findAllAsync("Cached body regression marker") }
+                matches.get() > 0
+            }
+            active.onActivity { a ->
+                val web = a.findViewById<WebView>(R.id.reading_web)
+                assertFalse(web.settings.javaScriptEnabled); assertFalse(web.settings.allowFileAccess)
+                web.clearMatches()
+            }
+            assertEquals("Neither original page nor script is requested", 0, server.requestCount)
+            report("Native Chromium text search confirms cached body rendered; original/script never requested; JS/file access disabled PASS (not a physical-touch or screenshot check)")
+        } finally {
+            scenario?.close(); store.deleteFeed(feed); server.shutdown()
+            if (oldSettings == null) store.deletePreference(ReaderSettings.KEY) else store.save(Preference(ReaderSettings.KEY, oldSettings))
+        }
+    }
     @Test fun liveJpcertBbcFullRssAndAtomDisplayInsideApp() = runBlocking {
         val token = System.nanoTime()
         val feed = store.add(Feed(name = "Live reader verification", url = "https://example.org/reader-live-$token", enabled = false))
@@ -92,11 +128,12 @@ class ArticleReadingChecks {
             val urls = listOf("JPCERT/CC" to "https://www.jpcert.or.jp/rss/jpcert.rdf", "BBC World" to "https://feeds.bbci.co.uk/news/world/rss.xml", "CAPA CAMERA WEB" to "https://getnavi.jp/capa/feed/", "Android Developers" to "https://android-developers.googleblog.com/feeds/posts/default")
             for ((index, source) in urls.withIndex()) {
                 val parsed = withContext(Dispatchers.IO) { Http.get(source.second).use { FeedParser.parse(Http.bytes(it, 4 * 1024 * 1024).inputStream(), it.request.url.toString()) } }
-                val entry = if (index >= 2) parsed.entries.first { ArticleHtml.hasContent(it.bodyHtml) } else parsed.entries.first()
+                val entry = if (index >= 2) parsed.entries.first { ArticleHtml.hasContent(it.bodyHtml) } else parsed.entries.firstOrNull { it.summaryHtml.isNotBlank() || it.bodyHtml.isNotBlank() } ?: parsed.entries.first()
                 if (index < 2) assertTrue(entry.summaryHtml.isNotBlank() || entry.bodyHtml.isNotBlank()) else assertTrue(entry.bodyHtml.length > 400)
                 val id = "live-reading-$token-$index"
                 store.insert(Article(id, feed, entry.title, entry.url, entry.summary, entry.published ?: System.currentTimeMillis(), imageCandidates = entry.images.joinToString("\n"), bodyHtml = entry.bodyHtml, summaryHtml = entry.summaryHtml, bodyTruncated = entry.bodyTruncated))
                 store.update(store.feed(feed)!!.copy(name = source.first))
+                scenario?.close()
                 scenario = ActivityScenario.launch(Intent(context, OpenArticleActivity::class.java).putExtra("article", id).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
                 page(scenario, id)
                 waitFor("Published title visible in WebView") { contains(ins.uiAutomation.rootInActiveWindow, entry.title.take(35)) }
@@ -106,7 +143,7 @@ class ArticleReadingChecks {
                 }
                 capture(scenario, "article-live-$index.png")
                 report("${source.first}: native fetch/parse body=${entry.bodyHtml.length} summary=${entry.summaryHtml.length}, in-app accessible title, no auto browser PASS")
-                scenario.close(); scenario = null
+                // Keep this test window awake while the next feed is fetched.
             }
         } finally {
             scenario?.close(); store.deleteFeed(feed)

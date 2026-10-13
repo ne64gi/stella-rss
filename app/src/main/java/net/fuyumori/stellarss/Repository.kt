@@ -24,21 +24,76 @@ class Repository(private val context: Context, val db: RssDatabase = RssDatabase
     val refreshing = MutableStateFlow(false)
     private val syncLock = Mutex()
     private val imageLock = Mutex()
+    private val actionLock = Mutex()
+    data class SwipeUndo(val ids: List<String>, val readAction: Boolean, val expiresAt: Long, val token: String = java.util.UUID.randomUUID().toString())
+    private val mutableSwipeUndo = MutableStateFlow<SwipeUndo?>(null)
+    val swipeUndo: kotlinx.coroutines.flow.StateFlow<SwipeUndo?> = mutableSwipeUndo
 
-    suspend fun saveFeed(feed: Feed): Long = syncLock.withLock {
+    suspend fun swipeArticle(id: String, readAction: Boolean, undoMillis: Long) = actionLock.withLock {
+        val changed = db.withTransaction {
+            val article = store.article(id) ?: return@withTransaction false
+            if (if (readAction) article.read else article.bookmarked) return@withTransaction false
+            if (readAction) store.markRead(id, true) else store.bookmark(id, true)
+            true
+        }
+        if (changed) {
+            mutableSwipeUndo.value = SwipeUndo(listOf(id), readAction, android.os.SystemClock.elapsedRealtime() + undoMillis)
+            if (readAction) Widgets.updateAll(context)
+        }
+        changed
+    }
+    suspend fun markAllRead(feedIds: List<Long>, allFeeds: Boolean, saved: Boolean, undoMillis: Long): Int = actionLock.withLock {
+        // Snapshot every matching unread ID, not the list's most recent 1,000 rows.
+        val changed = db.withTransaction {
+            val ids = if (allFeeds) store.unreadIds(emptyList(), true, saved)
+                else feedIds.distinct().chunked(900).flatMap { store.unreadIds(it, false, saved) }
+            ids.chunked(900).forEach { store.markRead(it, true) }
+            ids
+        }
+        if (changed.isNotEmpty()) {
+            mutableSwipeUndo.value = SwipeUndo(changed, true, android.os.SystemClock.elapsedRealtime() + undoMillis)
+            Widgets.updateAll(context)
+        }
+        changed.size
+    }
+    fun dismissSwipeUndo(action: SwipeUndo) { mutableSwipeUndo.compareAndSet(action, null) }
+    suspend fun undoSwipe(action: SwipeUndo) = actionLock.withLock {
+        if (mutableSwipeUndo.value != action) return@withLock false
+        if (android.os.SystemClock.elapsedRealtime() >= action.expiresAt) { dismissSwipeUndo(action); return@withLock false }
+        // Restore only the field changed by this action, never a stale whole-article snapshot.
+        db.withTransaction {
+            if (action.readAction) action.ids.chunked(900).forEach { store.markRead(it, false) }
+            else action.ids.forEach { store.bookmark(it, false) }
+        }
+        dismissSwipeUndo(action)
+        if (action.readAction) Widgets.updateAll(context)
+        true
+    }
+
+    suspend fun saveFeed(feed: Feed, folderId: Long? = null): Long = syncLock.withLock {
         val url = requireNotNull(webUrl(feed.url)) { "有効なHTTP(S) URLを入力してください" }
-        require(store.feeds().none { it.url == url && it.id != feed.id }) { "このフィードは登録済みです" }
         val id = db.withTransaction {
+            if (folderId != null) require(store.folders().any { it.id == folderId }) { "登録先フォルダがありません。選び直してください" }
+            val duplicate = store.feeds().firstOrNull { it.url == url && it.id != feed.id }
+            // Adding an existing subscription to a folder adds a classification, never another copy.
+            if (duplicate != null && feed.id == 0L && folderId != null) {
+                store.add(FolderFeed(folderId, duplicate.id))
+                return@withTransaction duplicate.id
+            }
+            require(duplicate == null) { "このフィードは登録済みです" }
             val old = store.feed(feed.id)
+            require(feed.id == 0L || old != null) { "このフィードは削除されています" }
             val changed = old != null && old.url != url
             val value = feed.copy(url = url, name = feed.name.trim().ifBlank { java.net.URI(url).host },
                 etag = if (changed) null else old?.etag, modified = if (changed) null else old?.modified,
                 contentVersion = if (changed) 0 else old?.contentVersion ?: 0,
                 lastChecked = if (changed) 0 else old?.lastChecked ?: 0, error = if (changed) null else old?.error)
-            if (feed.id == 0L) store.add(value) else {
+            val saved = if (feed.id == 0L) store.add(value) else {
                 if (changed) store.deleteArticles(feed.id)
                 store.update(value); feed.id
             }
+            if (folderId != null) store.add(FolderFeed(folderId, saved))
+            saved
         }
         Updates.schedule(context)
         Widgets.updateAll(context)
@@ -64,7 +119,7 @@ class Repository(private val context: Context, val db: RssDatabase = RssDatabase
                                 response.header("Last-Modified") ?: feed.modified, now, null)
                         } else {
                             val parsed = FeedParser.parse(Http.bytes(response, 4 * 1024 * 1024).inputStream(), response.request.url.toString())
-                            db.withTransaction {
+                            actionLock.withLock { db.withTransaction {
                                 for (entry in parsed.entries) {
                                     val id = digest("${feed.id}\n${entry.key}")
                                     val previous = store.article(id)
@@ -77,8 +132,11 @@ class Repository(private val context: Context, val db: RssDatabase = RssDatabase
                                 }
                                 store.fetched(feed.id, feed.url, response.header("ETag"), response.header("Last-Modified"), now, null)
                                 store.contentFetched(feed.id, feed.url)
-                                store.trimRead(feed.id)
-                            }
+                                // A refresh must not prune newly read articles during the Undo window.
+                                val undo = mutableSwipeUndo.value
+                                if (undo == null || !undo.readAction || android.os.SystemClock.elapsedRealtime() >= undo.expiresAt)
+                                    store.trimRead(feed.id)
+                            } }
                         }
                     }
                 } catch (e: CancellationException) { throw e

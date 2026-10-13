@@ -37,8 +37,8 @@ class OpenArticleActivity : Screen() {
     private var loading: Job? = null
     private var initialized = false
     private var restoreScroll = 0
-    private var documentUrl = ""
-    @Volatile private var imageMap: Map<String, String> = emptyMap()
+    private data class Document(val url: String, val html: String, val images: Map<String, String>)
+    @Volatile private var document: Document? = null
     var displayedPage: ArticleHtml.Page? = null
         private set
     val currentArticleId: String? get() = queue.getOrNull(index)
@@ -103,6 +103,7 @@ class OpenArticleActivity : Screen() {
         web.setDownloadListener { _, _, _, _, _ -> toast("ダウンロードは元記事から行ってください") }
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                if (request.isForMainFrame && request.method == "GET" && request.url.toString() == document?.url) return false
                 // Nothing from a publisher ever navigates this WebView, even a permitted HTTP URL.
                 val safe = webUrl(request.url.toString())
                 if (safe != null && request.isForMainFrame && request.hasGesture()) {
@@ -111,9 +112,16 @@ class OpenArticleActivity : Screen() {
                 }
                 return true
             }
-            override fun shouldOverrideUrlLoading(view: WebView, url: String) = true
+            override fun shouldOverrideUrlLoading(view: WebView, url: String) = url != document?.url
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse {
-                val source = imageMap[request.url.toString()]
+                val current = document
+                // Serve our exact in-memory document as well as its mapped images. A blanket
+                // denial here can reject the main document on device WebView implementations.
+                if (request.method == "GET" && request.isForMainFrame && request.url.toString() == current?.url) {
+                    return WebResourceResponse("text/html", "UTF-8", 200, "OK", mapOf("Cache-Control" to "no-store"),
+                        ByteArrayInputStream(current.html.toByteArray(Charsets.UTF_8)))
+                }
+                val source = current?.images?.get(request.url.toString())
                 // Exact, per-page image map; all other network/file/content/style/script requests are denied.
                 if (request.method == "GET" && !request.isForMainFrame && source != null) {
                     try {
@@ -128,7 +136,7 @@ class OpenArticleActivity : Screen() {
                 return WebResourceResponse("text/plain", "UTF-8", 403, "Blocked", emptyMap(), ByteArrayInputStream(byteArrayOf()))
             }
             override fun onPageFinished(view: WebView, url: String) {
-                if (url == documentUrl && restoreScroll > 0) {
+                if (url == document?.url && restoreScroll > 0) {
                     val y = restoreScroll; restoreScroll = 0
                     view.post { view.scrollTo(0, y) }
                 }
@@ -138,7 +146,7 @@ class OpenArticleActivity : Screen() {
     private fun loadCurrent() {
         val id = currentArticleId ?: return
         loading?.cancel()
-        imageMap = emptyMap(); displayedPage = null
+        document = null; displayedPage = null
         original.isEnabled = false
         web.stopLoading(); web.visibility = View.INVISIBLE
         updateChrome()
@@ -147,7 +155,7 @@ class OpenArticleActivity : Screen() {
             val current = row
             if (current == null) {
                 web.visibility = View.VISIBLE
-                web.loadDataWithBaseURL(ArticleHtml.ORIGIN, "<p>この記事は削除されたか、保存されていません。</p>", "text/html", "UTF-8", null)
+                showDocument("<meta charset='utf-8'><p>この記事は削除されたか、保存されていません。</p>", emptyMap())
                 return@launch
             }
             render(current)
@@ -159,12 +167,16 @@ class OpenArticleActivity : Screen() {
         val page = withContext(Dispatchers.Default) {
             ArticleHtml.page(current, settings, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(current.article.published)), UUID.randomUUID().toString())
         }
-        imageMap = page.images; displayedPage = page
-        documentUrl = ArticleHtml.ORIGIN + "article/" + UUID.randomUUID()
+        displayedPage = page
         web.visibility = View.VISIBLE
-        web.loadDataWithBaseURL(documentUrl, page.html, "text/html", "UTF-8", null)
+        showDocument(page.html, page.images)
         original.isEnabled = true
         updateChrome()
+    }
+    private fun showDocument(html: String, images: Map<String, String>) {
+        val current = Document(ArticleHtml.ORIGIN + "article/" + UUID.randomUUID(), html, images)
+        document = current
+        web.loadUrl(current.url)
     }
     private fun updateChrome() {
         val bg = Color.parseColor(if (settings.light) "#FAFAF7" else "#0B1220")
@@ -249,7 +261,7 @@ class OpenArticleActivity : Screen() {
         super.onSaveInstanceState(outState)
     }
     override fun onDestroy() {
-        if (::web.isInitialized) { imageMap = emptyMap(); web.stopLoading(); (web.parent as? android.view.ViewGroup)?.removeView(web); web.destroy() }
+        if (::web.isInitialized) { document = null; web.stopLoading(); (web.parent as? android.view.ViewGroup)?.removeView(web); web.destroy() }
         super.onDestroy()
     }
 }

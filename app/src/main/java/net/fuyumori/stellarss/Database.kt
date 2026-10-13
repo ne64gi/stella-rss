@@ -63,12 +63,12 @@ interface Store {
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun add(link: FolderFeed)
     @Query("DELETE FROM folder_feed WHERE feedId=:id") suspend fun clearMemberships(id: Long)
     @Query("DELETE FROM folder_feed WHERE feedId=:feedId AND folderId=:folderId") suspend fun unlink(feedId: Long, folderId: Long)
-    @Query("SELECT feedId, COUNT(*) AS count FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND read=0 GROUP BY feedId")
+    @Query("SELECT feedId, COUNT(*) AS count FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND read=0 AND bookmarked=0 GROUP BY feedId")
     fun watchUnread(): Flow<List<FeedUnread>>
     @Query("SELECT COUNT(*) FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND bookmarked=1")
     fun watchSavedCount(): Flow<Int>
     @Query("UPDATE articles SET bookmarked=:saved WHERE id=:id") suspend fun bookmark(id: String, saved: Boolean)
-    @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:unread=0 OR read=0) AND (:saved=0 OR bookmarked=1) ORDER BY published DESC, articles.id LIMIT 1000")
+    @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:unread=0 OR read=0) AND bookmarked=:saved ORDER BY published DESC, articles.id LIMIT 1000")
     fun watchSelection(ids: List<Long>, allFeeds: Boolean, unread: Boolean, saved: Boolean): Flow<List<ArticleRow>>
     @Query("SELECT * FROM feeds ORDER BY id") fun watchFeeds(): Flow<List<Feed>>
     @Query("SELECT * FROM feeds ORDER BY id") suspend fun feeds(): List<Feed>
@@ -89,6 +89,9 @@ interface Store {
     @Query("UPDATE articles SET title=:title,url=:url,summary=:summary,published=:published,imageCandidates=:candidates WHERE id=:id")
     suspend fun updateContent(id: String, title: String, url: String, summary: String, published: Long, candidates: String)
     @Query("UPDATE articles SET read=:read WHERE id=:id") suspend fun markRead(id: String, read: Boolean)
+    @Query("SELECT articles.id FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND read=0 AND (:allFeeds=1 OR feedId IN (:ids)) AND bookmarked=:saved")
+    suspend fun unreadIds(ids: List<Long>, allFeeds: Boolean, saved: Boolean): List<String>
+    @Query("UPDATE articles SET read=:read WHERE id IN (:ids)") suspend fun markRead(ids: List<String>, read: Boolean)
     @Query("UPDATE articles SET imageUrl=:url,imageChecked=:checked WHERE id=:id") suspend fun setImage(id: String, url: String?, checked: Long)
     @Query("UPDATE articles SET imageUrl=:url,imageChecked=:checked WHERE id=:id AND imageCandidates=:candidates AND url=:articleUrl")
     suspend fun setResolvedImage(id: String, url: String?, checked: Long, candidates: String, articleUrl: String): Int

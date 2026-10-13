@@ -1,5 +1,19 @@
 .gradle/
+.kotlin/
 **/build/
 local.properties
 *.jks
 verification-local/
+*.iml
+.idea/
+*.apk
+*.aab
+*.keystore
+.env
+.env.*
+.DS_Store
+
+# Local-only notes, execution evidence and conversation attachments
+/.reporitual/
+/AGENTS.md
+/.agenttalk/

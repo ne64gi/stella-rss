@@ -1,0 +1,46 @@
+name: Stella RSS Android checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Unit tests, lint and APK compilation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      SEGMENT_DOWNLOAD_TIMEOUT_MINS: '5'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up JDK 17 and Gradle cache
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+          cache-read-only: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
+
+      - name: Ensure Android SDK packages
+        # The hosted SDK's command-line tools are not guaranteed to be on PATH.
+        run: >-
+          "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+          --sdk_root="${ANDROID_HOME}"
+          --install 'platforms;android-35' 'build-tools;35.0.0'
+
+      # AndroidTest is compiled only: no emulator, device, signing secrets or deployment.
+      - name: Run unit tests, lint and debug builds
+        run: >-
+          ./gradlew --no-daemon --stacktrace --console=plain --max-workers=2 --continue
+          :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest

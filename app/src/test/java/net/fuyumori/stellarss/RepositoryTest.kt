@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.room.withTransaction
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.first
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.*
@@ -27,6 +28,127 @@ class RepositoryTest {
     }
     @After fun tearDown() { server.shutdown(); db.close() }
     private fun body(title: String = "one") = "<rss><channel><title>Test</title><item><guid>stable</guid><title>$title</title><link>${server.url("/article")}</link></item></channel></rss>"
+    @Test fun folderSubscriptionIsAtomicAndExistingSubscriptionIsReused() = runBlocking {
+        androidx.work.WorkManager.initialize(ApplicationProvider.getApplicationContext(), androidx.work.Configuration.Builder().build())
+        val store = db.store(); val org = Organization(db)
+        val root = org.saveFolder(name = "Development")
+        val child = org.saveFolder(name = "Kotlin", parent = root)
+        val feed = Feed(name = "Original", url = server.url("/folder-rss").toString(), enabled = false, showImages = false)
+        val id = repo.saveFeed(feed, child)
+        store.insert(Article("retained", id, "Retained", "https://example.org/", "", 1, read = true, bookmarked = true))
+        assertEquals(listOf(FolderFeed(child, id)), store.memberships())
+        assertEquals(id, repo.saveFeed(feed.copy(name = "Do not overwrite", showImages = true), root))
+        assertEquals(1, store.feeds().size)
+        assertEquals("Original", store.feed(id)!!.name)
+        assertFalse(store.feed(id)!!.showImages)
+        assertTrue(store.article("retained")!!.read && store.article("retained")!!.bookmarked)
+        assertEquals(setOf(root, child), store.memberships().map { it.folderId }.toSet())
+        assertEquals(setOf(id), org.library().feedIds(root))
+        assertEquals(id, repo.saveFeed(feed, root)) // Repeating an add is idempotent.
+        assertEquals(2, store.memberships().size)
+    }
+    @Test fun deletedDestinationDoesNotLeaveAnUnclassifiedSubscription() = runBlocking {
+        val store = db.store(); val org = Organization(db)
+        val folder = org.saveFolder(name = "Removed"); org.deleteFolder(folder)
+        try {
+            repo.saveFeed(Feed(url = server.url("/new").toString(), enabled = false), folder)
+            fail("Deleted destination must fail")
+        } catch (_: IllegalArgumentException) { }
+        assertTrue(store.feeds().isEmpty()); assertTrue(store.memberships().isEmpty())
+        val deleted = store.add(Feed(url = server.url("/deleted").toString(), enabled = false))
+        val value = store.feed(deleted)!!; store.deleteFeed(deleted)
+        try { repo.saveFeed(value); fail("Deleted feed must not appear to save") }
+        catch (_: IllegalArgumentException) { }
+        assertTrue(store.feeds().isEmpty())
+    }
+    @Test fun bulkReadIncludesOlderThanDisplayLimitAndUndoSurvivesRefresh() = runBlocking {
+        val store = db.store()
+        val feed = store.add(Feed(name = "many", url = server.url("/rss").toString(), showImages = false))
+        db.withTransaction {
+            for (n in 1..1205) store.insert(Article("bulk-$n", feed, "Article $n", "https://example.org/$n", "", n.toLong()))
+            store.insert(Article("was-read", feed, "Read", "https://example.org/read", "", 0, read = true))
+            store.insert(Article("saved", feed, "Saved", "https://example.org/saved", "", 0, bookmarked = true))
+        }
+        assertEquals(1000, store.watchSelection(emptyList(), true, false, false).first().size)
+        assertEquals(1205, repo.markAllRead(emptyList(), true, false, 60000))
+        val undo = repo.swipeUndo.value!!
+        assertEquals(0, repo.markAllRead(emptyList(), true, false, 60000))
+        assertEquals(undo, repo.swipeUndo.value)
+        assertTrue(store.article("bulk-1")!!.read)
+        assertFalse(store.article("saved")!!.read)
+        // Refresh would normally prune older read rows; keep them until Undo expires.
+        server.enqueue(MockResponse().setBody(body("New arrival")))
+        assertFalse(repo.sync())
+        assertNotNull(store.article("bulk-1"))
+        store.bookmark("bulk-2", true)
+        assertTrue(repo.undoSwipe(undo))
+        assertEquals(1205, store.unreadIds(emptyList(), true, false).size) // 1204 originals + new arrival
+        assertFalse(store.article(digest("$feed\nstable"))!!.read)
+        assertTrue(store.article("was-read")!!.read)
+        assertTrue(store.article("bulk-2")!!.bookmarked)
+        assertFalse(store.article("bulk-2")!!.read)
+        assertFalse(store.article("saved")!!.read)
+    }
+    @Test fun bulkScopeDeduplicatesNestedFoldersAndKeepsSavedAndDisabledSeparate() = runBlocking {
+        val store = db.store(); val org = Organization(db)
+        val root = org.saveFolder(name = "root"); val child = org.saveFolder(name = "child", parent = root)
+        val inside = store.add(Feed(name = "inside", url = "https://inside.test/rss"))
+        val outside = store.add(Feed(name = "outside", url = "https://outside.test/rss"))
+        val disabled = store.add(Feed(name = "disabled", url = "https://disabled.test/rss", enabled = false))
+        org.classify(inside, setOf(root, child)); org.classify(disabled, setOf(child))
+        for ((id, feed) in listOf("inside" to inside, "outside" to outside, "disabled" to disabled))
+            store.insert(Article(id, feed, id, "https://example.org/", "", 1))
+        store.insert(Article("saved", inside, "saved", "https://example.org/", "", 2, bookmarked = true))
+        val ids = org.library().feedIds(root).toList()
+        assertEquals(1, repo.markAllRead(ids + ids, false, false, 8000))
+        assertTrue(store.article("inside")!!.read)
+        assertFalse(store.article("outside")!!.read); assertFalse(store.article("disabled")!!.read)
+        assertFalse(store.article("saved")!!.read)
+        val undo = repo.swipeUndo.value!!
+        assertEquals(0, repo.markAllRead(emptyList(), false, false, 8000))
+        assertTrue(repo.undoSwipe(undo))
+        assertEquals(setOf("inside", "outside"), store.watchSelection(emptyList(), true, false, false).first().map { it.article.id }.toSet())
+        assertEquals(2, store.watchUnread().first().sumOf { it.count })
+        assertEquals(listOf("saved"), store.watchSelection(emptyList(), true, false, true).first().map { it.article.id })
+        assertEquals(1, repo.markAllRead(emptyList(), true, true, 8000))
+        assertTrue(store.article("saved")!!.read); assertTrue(store.article("saved")!!.bookmarked)
+        assertFalse(store.article("inside")!!.read)
+        assertTrue(repo.undoSwipe(repo.swipeUndo.value!!))
+        store.bookmark("saved", false)
+        assertEquals(3, store.watchUnread().first().sumOf { it.count })
+        assertEquals(3, store.watchSelection(emptyList(), true, false, false).first().size)
+    }
+    @Test fun swipeUndoRestoresOnlyChangedFieldAndRejectsSupersededAction() = runBlocking {
+        val store = db.store()
+        val feed = store.add(Feed(name = "test", url = server.url("/rss").toString()))
+        store.insert(Article("undo", feed, "one", "https://example.org/", "", 1))
+        assertTrue(repo.swipeArticle("undo", true, 8000))
+        val read = repo.swipeUndo.value!!
+        assertTrue(repo.swipeArticle("undo", false, 8000))
+        val saved = repo.swipeUndo.value!!
+        assertFalse(repo.undoSwipe(read))
+        assertFalse(repo.swipeArticle("undo", false, 8000))
+        assertEquals(saved, repo.swipeUndo.value)
+        assertTrue(repo.undoSwipe(saved))
+        assertTrue(store.article("undo")!!.read)
+        assertFalse(store.article("undo")!!.bookmarked)
+        store.markRead("undo", false)
+        assertTrue(repo.swipeArticle("undo", true, 8000))
+        store.bookmark("undo", true)
+        assertTrue(repo.undoSwipe(repo.swipeUndo.value!!))
+        assertFalse(store.article("undo")!!.read)
+        assertTrue(store.article("undo")!!.bookmarked)
+    }
+    @Test fun expiredUndoAndAlreadyReadDoNotAlterState() = runBlocking {
+        val store = db.store()
+        val feed = store.add(Feed(name = "test", url = server.url("/rss").toString()))
+        store.insert(Article("undo", feed, "one", "https://example.org/", "", 1, read = true))
+        assertFalse(repo.swipeArticle("undo", true, 8000)); assertNull(repo.swipeUndo.value)
+        assertTrue(repo.swipeArticle("undo", false, -1))
+        assertFalse(repo.undoSwipe(repo.swipeUndo.value!!))
+        assertTrue(store.article("undo")!!.read); assertTrue(store.article("undo")!!.bookmarked)
+        assertNull(repo.swipeUndo.value)
+    }
     @Test fun validators304ReadStateAndUndatedOrderingSurviveRefresh() = runBlocking {
         val feed = db.store().add(Feed(name = "test", url = server.url("/rss").toString(), showImages = false))
         server.enqueue(MockResponse().setBody(body()).addHeader("ETag", "\"v1\"").addHeader("Last-Modified", "Wed, 02 Oct 2002 08:00:00 GMT"))
