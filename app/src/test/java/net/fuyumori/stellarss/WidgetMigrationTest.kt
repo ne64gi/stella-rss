@@ -17,6 +17,7 @@ class WidgetMigrationTest {
     @Test fun schemaOnePreservesSubscriptionsReadsCustomAppearanceAndAddsCorners() = verifyMigration(1)
     @Test fun schemaTwoPreservesDataAndAddsEmptyClassifications() = verifyMigration(2)
     @Test fun schemaThreeKeepsFolderMembershipBookmarkAndAllSettings() = verifyMigration(3)
+    @Test fun schemaFourPreservesReaderBodyAndIntroducesDisabledContainers() = verifyMigration(4)
     private fun verifyMigration(version: Int) = runBlocking {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val name = "widget-migration-fixture.db"
@@ -31,7 +32,7 @@ class WidgetMigrationTest {
                 val indices = entity.optJSONArray("indices") ?: org.json.JSONArray()
                 for (j in 0 until indices.length()) legacy.execSQL(indices.getJSONObject(j).getString("createSql").replace("\${TABLE_NAME}", table))
             }
-            legacy.execSQL("INSERT INTO feeds VALUES (1,'Kept','https://example.com/rss',1,1,1,1,'etag','date',123,NULL)")
+            legacy.execSQL("INSERT INTO feeds (id,name,url,enabled,inWidgets,showImages,showSummary,etag,modified,lastChecked,error) VALUES (1,'Kept','https://example.com/rss',1,1,1,1,'etag','date',123,NULL)")
             legacy.execSQL("INSERT INTO articles (id,feedId,title,url,summary,published,read,imageCandidates,imageUrl,imageChecked) VALUES ('kept',1,'Article','https://example.com/a','',123,1,'',NULL,0)")
             legacy.execSQL("INSERT INTO widgets (id,feedIds,background,opacity,textColor,fontSp,images,unreadOnly) VALUES (1,'1',${0xFF101C2D.toInt()},92,${0xFFF4F7FC.toInt()},16,1,1)")
             legacy.execSQL("INSERT INTO widgets (id,feedIds,background,opacity,textColor,fontSp,images,unreadOnly) VALUES (2,'1',${0xFF112233.toInt()},45,${0xFFEEEEEE.toInt()},24,0,0)")
@@ -39,27 +40,33 @@ class WidgetMigrationTest {
             if (version >= 2) {
                 legacy.execSQL("UPDATE widgets SET background=${0xFF242629.toInt()}, opacity=98, textColor=${0xFFF5F5F5.toInt()}, fontSp=15 WHERE id=1")
             }
-            if (version == 3) {
+            if (version >= 3) {
                 legacy.execSQL("INSERT INTO folders (id,name,parentId) VALUES (1,'Root',NULL),(2,'Child',1)")
                 legacy.execSQL("INSERT INTO folder_feed VALUES (2,1)")
                 legacy.execSQL("UPDATE articles SET bookmarked=1")
                 legacy.execSQL("UPDATE widgets SET folderId=2 WHERE id=2")
             }
+            if (version == 4) legacy.execSQL("UPDATE articles SET bodyHtml='<p>Keep body</p>', summaryHtml='<p>Summary</p>', bodyTruncated=1")
             legacy.version = version
         } finally { legacy.close() }
-        val db = Room.databaseBuilder(context, RssDatabase::class.java, name).addMigrations(RssDatabase.MIGRATION_1_2, RssDatabase.MIGRATION_2_3, RssDatabase.MIGRATION_3_4).build()
+        val db = Room.databaseBuilder(context, RssDatabase::class.java, name).addMigrations(RssDatabase.MIGRATION_1_2, RssDatabase.MIGRATION_2_3, RssDatabase.MIGRATION_3_4, RssDatabase.MIGRATION_4_5).build()
         try {
+            assertEquals(listOf(NewsContainer(1, "デフォルト")), db.store().containers())
+            assertFalse(ReadingSpaces(db).state().enabled)
+            assertEquals(1L, db.store().feed(1)!!.containerId)
+            assertNull(db.store().feed(1)!!.translationTarget)
+            assertTrue(db.store().folders().all { it.containerId == 1L })
             assertEquals("etag", db.store().feed(1)!!.etag)
             assertTrue(db.store().article("kept")!!.read)
-            assertEquals(version == 3, db.store().article("kept")!!.bookmarked)
-            assertEquals("", db.store().article("kept")!!.bodyHtml)
+            assertEquals(version >= 3, db.store().article("kept")!!.bookmarked)
+            assertEquals(if (version == 4) "<p>Keep body</p>" else "", db.store().article("kept")!!.bodyHtml)
             assertEquals(0, db.store().feed(1)!!.contentVersion)
-            assertEquals(if (version == 3) 2 else 0, db.store().folders().size)
-            assertEquals(if (version == 3) listOf(FolderFeed(2, 1)) else emptyList<FolderFeed>(), db.store().memberships())
+            assertEquals(if (version >= 3) 2 else 0, db.store().folders().size)
+            assertEquals(if (version >= 3) listOf(FolderFeed(2, 1)) else emptyList<FolderFeed>(), db.store().memberships())
             assertNull(db.store().widget(1)!!.folderId)
             assertEquals(WidgetConfig(1, feedIds = "1", unreadOnly = true), db.store().widget(1))
             assertEquals(WidgetConfig(2, feedIds = "1", background = 0xFF112233.toInt(), opacity = 45,
-                textColor = 0xFFEEEEEE.toInt(), fontSp = 24, images = false, folderId = if (version == 3) 2 else null), db.store().widget(2))
+                textColor = 0xFFEEEEEE.toInt(), fontSp = 24, images = false, folderId = if (version >= 3) 2 else null), db.store().widget(2))
             assertEquals("3", db.store().preference("page:2"))
         } finally { db.close(); context.deleteDatabase(name) }
     }

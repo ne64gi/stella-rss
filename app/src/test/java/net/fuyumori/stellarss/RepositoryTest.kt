@@ -28,6 +28,26 @@ class RepositoryTest {
     }
     @After fun tearDown() { server.shutdown(); db.close() }
     private fun body(title: String = "one") = "<rss><channel><title>Test</title><item><guid>stable</guid><title>$title</title><link>${server.url("/article")}</link></item></channel></rss>"
+    @Test fun containerQueriesAndBulkReadUseCurrentOwnershipEvenWithStaleFeedIds() = runBlocking {
+        val spaces = ReadingSpaces(db); val target = spaces.save(name = "World")
+        val local = db.store().add(Feed(url = "https://example.com/local"))
+        val world = db.store().add(Feed(url = "https://example.com/world", containerId = target))
+        db.withTransaction {
+            for (i in 0..1001) db.store().insert(Article("local-$i", local, "Local", "https://example.com/$i", "", i + 10L))
+            db.store().insert(Article("world", world, "World", "https://example.com/a", "", 1))
+        }
+        assertEquals(listOf("world"), db.store().watchSelection(emptyList(), true, false, false, target).first().map { it.article.id })
+        assertEquals(1, repo.markAllRead(emptyList(), true, false, 10_000, target))
+        assertTrue(db.store().article("world")!!.read)
+        assertFalse(db.store().article("local-0")!!.read)
+        db.store().markRead("world", false)
+        spaces.moveFeed(world, 1)
+        // Delayed UI/library emissions may still contain the old ID; SQL must enforce the boundary.
+        assertTrue(db.store().watchSelection(listOf(world), false, false, false, target).first().isEmpty())
+        assertTrue(db.store().widgetArticlesFor(listOf(world), false, false, target).isEmpty())
+        assertEquals(0, repo.markAllRead(listOf(world), false, false, 10_000, target))
+        assertFalse(db.store().article("world")!!.read)
+    }
     @Test fun folderSubscriptionIsAtomicAndExistingSubscriptionIsReused() = runBlocking {
         androidx.work.WorkManager.initialize(ApplicationProvider.getApplicationContext(), androidx.work.Configuration.Builder().build())
         val store = db.store(); val org = Organization(db)

@@ -13,7 +13,7 @@ import java.util.concurrent.TimeUnit
 class RssApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val repository by lazy { Repository(this) }
-    override fun onCreate() { super.onCreate(); scope.launch { Updates.schedule(this@RssApp) } }
+    override fun onCreate() { super.onCreate(); scope.launch { TranslationStores(this@RssApp).prune(); Updates.schedule(this@RssApp) } }
 }
 val Context.rss: Repository get() = (applicationContext as RssApp).repository
 val Context.appScope: CoroutineScope get() = (applicationContext as RssApp).scope
@@ -42,11 +42,11 @@ class Repository(private val context: Context, val db: RssDatabase = RssDatabase
         }
         changed
     }
-    suspend fun markAllRead(feedIds: List<Long>, allFeeds: Boolean, saved: Boolean, undoMillis: Long): Int = actionLock.withLock {
+    suspend fun markAllRead(feedIds: List<Long>, allFeeds: Boolean, saved: Boolean, undoMillis: Long, containerId: Long? = null): Int = actionLock.withLock {
         // Snapshot every matching unread ID, not the list's most recent 1,000 rows.
         val changed = db.withTransaction {
-            val ids = if (allFeeds) store.unreadIds(emptyList(), true, saved)
-                else feedIds.distinct().chunked(900).flatMap { store.unreadIds(it, false, saved) }
+            val ids = if (allFeeds) store.unreadIds(emptyList(), true, saved, containerId)
+                else feedIds.distinct().chunked(900).flatMap { store.unreadIds(it, false, saved, containerId) }
             ids.chunked(900).forEach { store.markRead(it, true) }
             ids
         }
@@ -73,18 +73,25 @@ class Repository(private val context: Context, val db: RssDatabase = RssDatabase
     suspend fun saveFeed(feed: Feed, folderId: Long? = null): Long = syncLock.withLock {
         val url = requireNotNull(webUrl(feed.url)) { "有効なHTTP(S) URLを入力してください" }
         val id = db.withTransaction {
+            ReadingSpaces(db).ensureDefault()
+            require(feed.translationTarget == null || feed.translationTarget in listOf("", "ja")) { "翻訳設定が正しくありません" }
+            val folder = folderId?.let { id -> store.folders().find { it.id == id } }
             if (folderId != null) require(store.folders().any { it.id == folderId }) { "登録先フォルダがありません。選び直してください" }
             val duplicate = store.feeds().firstOrNull { it.url == url && it.id != feed.id }
             // Adding an existing subscription to a folder adds a classification, never another copy.
             if (duplicate != null && feed.id == 0L && folderId != null) {
+                require(duplicate.containerId == folder?.containerId) { "別のコンテナに登録済みです。フィードの移動を使用してください" }
                 store.add(FolderFeed(folderId, duplicate.id))
                 return@withTransaction duplicate.id
             }
             require(duplicate == null) { "このフィードは登録済みです" }
             val old = store.feed(feed.id)
             require(feed.id == 0L || old != null) { "このフィードは削除されています" }
+            val container = old?.containerId ?: folder?.containerId ?: feed.containerId
+            require(store.containers().any { it.id == container }) { "コンテナが見つかりません" }
+            require(folder == null || folder.containerId == container) { "同じコンテナのフォルダを選んでください" }
             val changed = old != null && old.url != url
-            val value = feed.copy(url = url, name = feed.name.trim().ifBlank { java.net.URI(url).host },
+            val value = feed.copy(url = url, name = feed.name.trim().ifBlank { java.net.URI(url).host }, containerId = container,
                 etag = if (changed) null else old?.etag, modified = if (changed) null else old?.modified,
                 contentVersion = if (changed) 0 else old?.contentVersion ?: 0,
                 lastChecked = if (changed) 0 else old?.lastChecked ?: 0, error = if (changed) null else old?.error)
@@ -106,6 +113,7 @@ class Repository(private val context: Context, val db: RssDatabase = RssDatabase
         Widgets.updateAll(context)
     }
     suspend fun sync(): Boolean = syncLock.withLock {
+        TranslationStores(context).prune()
         refreshing.value = true
         var failed = false
         try {

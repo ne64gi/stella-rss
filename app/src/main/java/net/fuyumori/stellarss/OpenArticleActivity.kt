@@ -36,6 +36,7 @@ class OpenArticleActivity : Screen() {
     private var row: ArticleRow? = null
     private var loading: Job? = null
     private var initialized = false
+    private lateinit var translation: ReaderTranslation
     private var restoreScroll = 0
     private data class Document(val url: String, val html: String, val images: Map<String, String>)
     @Volatile private var document: Document? = null
@@ -55,6 +56,8 @@ class OpenArticleActivity : Screen() {
         toolbar.addView(saved)
         toolbar.addView(iconButton("Aa", "記事の表示設定") { settingsDialog() }.apply { textSize = 17f; id = R.id.reading_settings })
         root.addView(toolbar, LinearLayout.LayoutParams(-1, dp(52)))
+        translation = ReaderTranslation(this) { translated -> row?.let { render(it, translated) } }
+        root.addView(translation.view)
         web = ReadingWebView(this) { delta -> move(delta) }.apply { id = R.id.reading_web }
         root.addView(web, LinearLayout.LayoutParams(-1, 0, 1f))
         footer = row().apply { setPadding(dp(4), dp(2), dp(4), dp(2)) }
@@ -146,6 +149,7 @@ class OpenArticleActivity : Screen() {
     private fun loadCurrent() {
         val id = currentArticleId ?: return
         loading?.cancel()
+        translation.clear(); row = null
         document = null; displayedPage = null
         original.isEnabled = false
         web.stopLoading(); web.visibility = View.INVISIBLE
@@ -161,11 +165,14 @@ class OpenArticleActivity : Screen() {
             render(current)
             // Once shown, a quick page turn or Back must not cancel the read-state write.
             appScope.launch { rss.markRead(id, true) }
+            val automatic = withContext(Dispatchers.IO) { ReadingSpaces(rss.db).translationTarget(current.article.feedId) == "ja" }
+            val source = withContext(Dispatchers.Default) { ArticleHtml.source(current, settings) }
+            translation.bind(source, automatic)
         }
     }
-    private suspend fun render(current: ArticleRow) {
+    private suspend fun render(current: ArticleRow, translated: net.fuyumori.stellarss.translation.TranslatedArticle? = translation.result) {
         val page = withContext(Dispatchers.Default) {
-            ArticleHtml.page(current, settings, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(current.article.published)), UUID.randomUUID().toString())
+            ArticleHtml.page(current, settings, DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(current.article.published)), UUID.randomUUID().toString(), translated)
         }
         displayedPage = page
         web.visibility = View.VISIBLE
@@ -179,6 +186,7 @@ class OpenArticleActivity : Screen() {
         web.loadUrl(current.url)
     }
     private fun updateChrome() {
+        translation.theme(settings.light)
         val bg = Color.parseColor(if (settings.light) "#FAFAF7" else "#0B1220")
         val ink = if (settings.light) Color.parseColor("#202936") else INK
         val accent = if (settings.light) Color.parseColor("#166681") else ACCENT
@@ -252,13 +260,21 @@ class OpenArticleActivity : Screen() {
                 appScope.launch { rss.store.save(Preference(ReaderSettings.KEY, encoded)) }
                 restoreScroll = web.scrollY
                 loading?.cancel()
-                row?.let { current -> loading = lifecycleScope.launch { render(current) } }
+                translation.clear()
+                row?.let { current -> loading = lifecycleScope.launch {
+                    render(current)
+                    translation.bind(withContext(Dispatchers.Default) { ArticleHtml.source(current, settings) }, false)
+                } }
             }.setNegativeButton("キャンセル", null).show()
     }
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putStringArrayList("queue", queue); outState.putString("current", currentArticleId)
         if (::web.isInitialized) outState.putInt("scroll", web.scrollY)
         super.onSaveInstanceState(outState)
+    }
+    override fun onStop() {
+        if (::translation.isInitialized) translation.stop()
+        super.onStop()
     }
     override fun onDestroy() {
         if (::web.isInitialized) { document = null; web.stopLoading(); (web.parent as? android.view.ViewGroup)?.removeView(web); web.destroy() }

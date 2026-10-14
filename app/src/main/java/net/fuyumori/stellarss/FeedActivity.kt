@@ -15,6 +15,9 @@ class FeedActivity : Screen() {
     private var old: Feed? = null
     private var library = Library()
     private var folderId: Long? = null
+    private var containerId = 1L
+    private var extensions = false
+    private lateinit var translation: Spinner
     private lateinit var name: EditText
     private lateinit var url: EditText
     private lateinit var enabled: CheckBox
@@ -46,6 +49,9 @@ class FeedActivity : Screen() {
                 withContext(Dispatchers.IO) {
                     library = Organization(rss.db).library()
                     if (editId != 0L) old = rss.store.feed(editId) ?: error("このフィードは削除されています")
+                    extensions = ReadingSpaces(rss.db).state().enabled
+                    containerId = old?.containerId ?: library.folders.find { it.id == folderId }?.containerId ?: intent.getLongExtra("container", 1)
+                    library = library.inContainer(containerId)
                 }
                 buildForm(content, savedInstanceState)
                 save.isEnabled = true
@@ -86,6 +92,14 @@ class FeedActivity : Screen() {
         widgets = check("ウィジェットにも表示", old?.inWidgets ?: true, "widgets", R.id.feed_widgets)
         images = check("画像を表示", old?.showImages ?: true, "images", R.id.feed_images)
         summary = check("一覧に概要を表示", old?.showSummary ?: true, "summary", R.id.feed_summary)
+        caption("記事の翻訳")
+        translation = Spinner(this).apply {
+            adapter = ArrayAdapter(this@FeedActivity, android.R.layout.simple_spinner_dropdown_item,
+                listOf(if (extensions) "コンテナの設定を使う" else "標準設定を使う", "手動で翻訳", "開いたら日本語に翻訳"))
+            setSelection(draft?.getInt("translation") ?: when (old?.translationTarget) { "" -> 1; "ja" -> 2; else -> 0 })
+        }
+        panel.addView(translation)
+        panel.addView(label("翻訳はGoogleの端末内モデルで行います。初回は言語データの取得が必要です。", 12f, MUTED))
         old?.let { feed ->
             caption("取得状態")
             val time = if (feed.lastChecked == 0L) "未取得" else "最終確認 ${DateUtils.getRelativeTimeSpanString(feed.lastChecked)}"
@@ -106,7 +120,7 @@ class FeedActivity : Screen() {
     }
     private fun chooseFolder() {
         lifecycleScope.launch {
-            library = withContext(Dispatchers.IO) { Organization(rss.db).library() }
+            library = withContext(Dispatchers.IO) { Organization(rss.db).library().inContainer(containerId) }
             val folders = library.sortedPaths()
             AlertDialog.Builder(this@FeedActivity).setTitle("登録先フォルダ")
                 .setSingleChoiceItems((listOf("未分類") + folders.map { library.path(it) }).toTypedArray(),
@@ -118,7 +132,8 @@ class FeedActivity : Screen() {
     private fun saveFeed() {
         if (saving) return
         val value = (old ?: Feed(url = "")).copy(name = name.text.toString(), url = url.text.toString(),
-            enabled = enabled.isChecked, inWidgets = widgets.isChecked, showImages = images.isChecked, showSummary = summary.isChecked)
+            enabled = enabled.isChecked, inWidgets = widgets.isChecked, showImages = images.isChecked, showSummary = summary.isChecked, containerId = containerId,
+            translationTarget = when (translation.selectedItemPosition) { 1 -> ""; 2 -> "ja"; else -> null })
         val target = if (old == null) folderId else null
         saving = true; save.isEnabled = false
         lifecycleScope.launch {
@@ -136,6 +151,7 @@ class FeedActivity : Screen() {
         if (::summary.isInitialized) {
             outState.putString("url", url.text.toString()); outState.putString("name", name.text.toString())
             outState.putBoolean("enabled", enabled.isChecked); outState.putBoolean("widgets", widgets.isChecked)
+            outState.putInt("translation", translation.selectedItemPosition)
             outState.putBoolean("images", images.isChecked); outState.putBoolean("summary", summary.isChecked)
         }
         super.onSaveInstanceState(outState)

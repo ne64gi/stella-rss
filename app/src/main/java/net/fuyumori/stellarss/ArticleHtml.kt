@@ -30,7 +30,8 @@ object ArticleHtml {
     }
     fun hasContent(html: String) = Jsoup.parseBodyFragment(html).let { it.text().isNotBlank() || it.select("img").isNotEmpty() }
     data class Page(val html: String, val images: Map<String, String>, val notice: String)
-    fun page(row: ArticleRow, settings: ReaderSettings, date: String, token: String): Page {
+    data class Source(val title: String, val html: String, val notice: String)
+    fun source(row: ArticleRow, settings: ReaderSettings): Source {
         val a = row.article
         val body = sanitize(a.bodyHtml, a.url)
         val summary = sanitize(a.summaryHtml, a.url).ifBlank { if (a.summary.isBlank()) "" else "<p>${text(a.summary)}</p>" }
@@ -43,7 +44,14 @@ object ArticleHtml {
             Jsoup.parseBodyFragment(body).text().length < 400 -> "RSSに含まれる短い本文を表示しています。続きは元記事でご確認ください。"
             else -> "RSSに含まれる本文を表示しています。全文とは限りません。"
         } + if (a.bodyTruncated) " 長い配信内容のため、保存できた範囲を表示しています。" else ""
-        val doc = Jsoup.parseBodyFragment(selected)
+        return Source(a.title, selected, notice)
+    }
+    fun page(row: ArticleRow, settings: ReaderSettings, date: String, token: String, translated: net.fuyumori.stellarss.translation.TranslatedArticle? = null): Page {
+        val a = row.article
+        val source = source(row, settings)
+        val notice = source.notice + if (translated != null) " Googleによる端末内翻訳です。正確さは原文でもご確認ください。" else ""
+        // Cache/provider output passes through the same structural boundary as feed HTML.
+        val doc = Jsoup.parseBodyFragment(translated?.let { sanitize(it.html, a.url) } ?: source.html)
         if (settings.images && row.showImages) {
             val hero = webUrl(a.imageUrl) ?: a.imageCandidates.lines().firstNotNullOfOrNull { webUrl(it) }
             if (hero != null && doc.select("img").none { it.attr("src") == hero }) doc.body().prependElement("figure").appendElement("img").attr("src", hero).attr("alt", "記事の代表画像")
@@ -65,7 +73,7 @@ object ArticleHtml {
         val html = """<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src $ORIGIN; style-src 'unsafe-inline'; script-src 'none'; frame-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; connect-src 'none'">
             <style>html{background:$bg;color:$ink}body{font-family:system-ui,sans-serif;font-size:${settings.fontSp}px;line-height:${settings.lineHeight};padding:${settings.margin}px;margin:0 auto;max-width:760px;overflow-wrap:anywhere}h1{font-size:1.4em;line-height:1.4;margin:.6em 0 1em}h2{font-size:1.2em}h3,h4,h5,h6{font-size:1.05em}p{margin:.8em 0}a{color:$accent}img{display:block;max-width:100%;height:auto;max-height:380px;object-fit:contain;margin:1em auto;border-radius:8px}figure{margin:0}figcaption,.meta,.notice{font-size:.76em;color:$muted}blockquote{border-left:3px solid $accent;padding-left:1em;margin:1em 0}pre{white-space:pre-wrap}table{display:block;overflow-x:auto;border-collapse:collapse}td,th{border:1px solid $divider;padding:.4em}hr{border:0;border-top:1px solid $divider}.notice{border-top:1px solid $divider;padding-top:1em;margin-top:2em}ul,ol{padding-left:1.5em}</style></head>
-            <body><div class="meta">${text(row.feedName)} · ${text(date)}</div><h1>${text(a.title)}</h1><main>${doc.body().html()}</main><p class="notice">${text(notice)}</p></body></html>""".trimIndent()
+            <body><div class="meta">${text(row.feedName)} · ${text(date)}</div><h1>${text(translated?.title ?: a.title)}</h1><main>${doc.body().html()}</main><p class="notice">${text(notice)}</p></body></html>""".trimIndent()
         return Page(html, imageMap, notice)
     }
 }

@@ -21,4 +21,6 @@
     <item name="feed_widgets" type="id" />
     <item name="feed_images" type="id" />
     <item name="feed_summary" type="id" />
+    <item name="container_select" type="id" />
+    <item name="reading_translate" type="id" />
 </resources>

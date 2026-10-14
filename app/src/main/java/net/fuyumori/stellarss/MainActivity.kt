@@ -28,14 +28,21 @@ import androidx.recyclerview.widget.ItemTouchHelper
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
-private data class ArticleQuery(val ids: List<Long> = emptyList(), val all: Boolean = true, val unread: Boolean = false, val saved: Boolean = false)
+private data class ArticleQuery(val ids: List<Long> = emptyList(), val all: Boolean = true, val unread: Boolean = false, val saved: Boolean = false, val containerId: Long? = null)
 class MainActivity : Screen() {
     private var unread = false
     private var scope = "all"
     private var scopeId = 0L
     private var library = Library()
+    private var spaceState = ReadingSpaces.State()
+    private lateinit var spaceControls: SpaceControls
+    private lateinit var headlineTranslation: HeadlineTranslation
+    private val spaces by lazy { ReadingSpaces(rss.db) }
+    internal val containersEnabled get() = spaceState.enabled
+    internal fun moveToContainer(id: Long, folder: Boolean) = spaceControls.move(id, folder)
+    private var libraryLoaded = false
     private var savedCount = 0
-    private val query = MutableStateFlow(ArticleQuery())
+    private val query = MutableStateFlow(ArticleQuery(all = false))
     private var allRows: List<ArticleRow> = emptyList()
     private lateinit var articles: ArticleAdapter
     private lateinit var empty: TextView
@@ -55,7 +62,7 @@ class MainActivity : Screen() {
             try {
                 val result = withContext(Dispatchers.IO) {
                     val outlines = contentResolver.openInputStream(uri)?.use(Opml::parse) ?: error("ファイルを開けません")
-                    organization.importOpml(outlines).also { Widgets.updateAll(this@MainActivity); Updates.refresh(this@MainActivity) }
+                    organization.importOpml(outlines, if (spaceState.enabled) spaceState.selected else 1).also { Widgets.updateAll(this@MainActivity); Updates.refresh(this@MainActivity) }
                 }
                 toast("${result.feeds}フィード・${result.folders}フォルダを追加しました")
             } catch (e: Exception) { if (e is CancellationException) throw e; toast(e.message ?: "OPMLを読み込めません") }
@@ -66,7 +73,7 @@ class MainActivity : Screen() {
             try {
                 withContext(Dispatchers.IO) {
                     // Serialize completely before opening the destination, so errors don't truncate it.
-                    val bytes = java.io.ByteArrayOutputStream().also { Opml.write(organization.library(), it) }.toByteArray()
+                    val bytes = java.io.ByteArrayOutputStream().also { Opml.write(organization.library().inContainer(if (spaceState.enabled) spaceState.selected else null), it) }.toByteArray()
                     contentResolver.openOutputStream(uri, "wt")?.use { it.write(bytes) } ?: error("ファイルに書き込めません")
                 }
                 toast("OPMLを書き出しました")
@@ -79,6 +86,7 @@ class MainActivity : Screen() {
         unread = savedInstanceState?.getBoolean("unread") ?: false
         scope = savedInstanceState?.getString("scope") ?: "all"
         scopeId = savedInstanceState?.getLong("scopeId") ?: 0
+        spaceState = ReadingSpaces.State(savedInstanceState?.getBoolean("containers") ?: false, savedInstanceState?.getLong("scopeContainer", 1) ?: 1)
         drawer = DrawerLayout(this).apply { id = R.id.reader_drawer; setScrimColor(0x99000000.toInt()) }
         root.addView(drawer, LinearLayout.LayoutParams(-1, 0, 1f))
         val content = column()
@@ -116,6 +124,8 @@ class MainActivity : Screen() {
             itemAnimator = null
             clipToPadding = false; setPadding(dp(16), 0, dp(16), dp(8))
         }
+        headlineTranslation = HeadlineTranslation(this, list, { articles.currentList }, articles::showTitles)
+        content.addView(headlineTranslation.view, LinearLayout.LayoutParams(-1, -2))
         refresh = ArticleRefreshLayout(this).apply {
             id = R.id.article_refresh
             setColorSchemeColors(ACCENT); setProgressBackgroundColorSchemeColor(SURFACE)
@@ -172,6 +182,8 @@ class MainActivity : Screen() {
         tree = LibraryDrawer(this, { kind, id ->
             scope = kind; scopeId = id; refreshQuery(); drawer.closeDrawer(Gravity.LEFT)
         }, { folder -> addFeed(folder) }, { launchImport() }, { exportDocument.launch("stella-rss.opml") })
+        spaceControls = SpaceControls(this)
+        tree.view.addView(spaceControls.view, 0)
         drawer.addView(tree.view, DrawerLayout.LayoutParams(dp(320).coerceAtMost(resources.displayMetrics.widthPixels - dp(40)), -1, Gravity.LEFT))
         val back = object : OnBackPressedCallback(false) { override fun handleOnBackPressed() { drawer.closeDrawer(Gravity.LEFT) } }
         onBackPressedDispatcher.addCallback(this, back)
@@ -205,18 +217,32 @@ class MainActivity : Screen() {
                 if (action != null) rss.dismissSwipeUndo(action)
             } }
             launch {
-                combine(rss.store.watchFeeds(), rss.store.watchFolders(), rss.store.watchMemberships(), rss.store.watchUnread()) {
+                withContext(Dispatchers.IO) { spaces.ensureDefault() }
+                val base = combine(rss.store.watchFeeds(), rss.store.watchFolders(), rss.store.watchMemberships(), rss.store.watchUnread()) {
                     feeds, folders, links, counts -> Library(feeds, folders, links, counts)
-                }.collect { library = it; tree.render(library, savedCount, scope, scopeId); refreshQuery() }
+                }
+                combine(base, rss.store.watchContainers(), rss.store.watchSavedCounts(), spaces.watch()) { tree, containers, saved, state ->
+                    tree.copy(containers = containers, saved = saved) to state
+                }.collect { (tree, requested) ->
+                    val state = requested.copy(selected = requested.selected.takeIf { id -> tree.containers.any { it.id == id } } ?: 1)
+                    if (state != spaceState) { scope = "all"; scopeId = 0; allRows = emptyList(); articles.submitList(emptyList()) }
+                    libraryLoaded = true; spaceState = state
+                    library = tree.inContainer(if (state.enabled) state.selected else null)
+                    headlineTranslation.eligibleFeeds(ReadingSpaces.automaticFeedIds(library.feeds, tree.containers, state.enabled))
+                    savedCount = library.saved.sumOf { it.count }
+                    if ((scope == "feed" && library.feeds.none { it.id == scopeId }) || (scope == "folder" && library.folders.none { it.id == scopeId })) { scope = "all"; scopeId = 0 }
+                    spaceControls.render(state, tree.containers); refreshQuery()
+                }
             }
-            launch { rss.store.watchSavedCount().collect { savedCount = it; tree.render(library, savedCount, scope, scopeId) } }
-            launch { query.flatMapLatest { rss.store.watchSelection(it.ids, it.all, it.unread, it.saved) }.collect {
-                allRows = it; articles.submitList(it); showStatus()
+            launch { query.flatMapLatest { selection -> rss.store.watchSelection(selection.ids, selection.all, selection.unread, selection.saved, selection.containerId).map { selection to it } }.collect { (selection, rows) ->
+                if (selection != query.value) return@collect
+                allRows = rows; articles.submitList(rows) { list.post { headlineTranslation.refresh() } }; showStatus()
             } }
             launch { rss.refreshing.collect { showStatus() } }
         } }
     }
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putBoolean("containers", spaceState.enabled); outState.putLong("scopeContainer", spaceState.selected)
         outState.putBoolean("unread", unread); outState.putString("scope", scope); outState.putLong("scopeId", scopeId)
         super.onSaveInstanceState(outState)
     }
@@ -227,8 +253,9 @@ class MainActivity : Screen() {
         else -> "すべての記事"
     }
     private fun refreshQuery() {
+        if (!libraryLoaded) return
         val ids = when (scope) { "folder" -> library.feedIds(scopeId).sorted(); "feed" -> listOf(scopeId); else -> emptyList() }
-        query.value = ArticleQuery(ids, scope == "all" || scope == "saved", unread, scope == "saved")
+        query.value = ArticleQuery(ids, scope == "all" || scope == "saved", unread, scope == "saved", if (spaceState.enabled) spaceState.selected else null)
         allTab.rounded(if (!unread) SURFACE else android.graphics.Color.TRANSPARENT, 16f)
         unreadTab.rounded(if (unread) SURFACE else android.graphics.Color.TRANSPARENT, 16f)
         allTab.setTextColor(if (!unread) INK else MUTED); unreadTab.setTextColor(if (unread) INK else MUTED)
@@ -254,7 +281,7 @@ class MainActivity : Screen() {
         markingAll = true
         appScope.launch {
             try {
-                val count = rss.markAllRead(selected.ids, selected.all, selected.saved, undoMillis)
+                val count = rss.markAllRead(selected.ids, selected.all, selected.saved, undoMillis, selected.containerId)
                 if (count == 0) withContext(Dispatchers.Main) { if (!isDestroyed) toast("この範囲に未読記事はありません") }
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
@@ -262,13 +289,13 @@ class MainActivity : Screen() {
             } finally { withContext(NonCancellable + Dispatchers.Main) { markingAll = false } }
         }
     }
-    private fun addFeed(folder: Long?) { startActivity(Intent(this, FeedActivity::class.java).putExtra("add", true).putExtra("folder", folder ?: 0L)) }
+    private fun addFeed(folder: Long?) { startActivity(Intent(this, FeedActivity::class.java).putExtra("add", true).putExtra("folder", folder ?: 0L).putExtra("container", if (spaceState.enabled) spaceState.selected else 1L)) }
     private fun launchImport() { importDocument.launch(arrayOf("text/*", "application/xml", "application/octet-stream", "application/x-opml+xml")) }
     private fun settingsMenu() {
-        AlertDialog.Builder(this).setTitle(selectionName()).setItems(arrayOf("すべて既読にする", "ウィジェット", "更新間隔", "OPMLを読み込む", "OPMLを書き出す")) { _, item ->
+        AlertDialog.Builder(this).setTitle(selectionName()).setItems(arrayOf("すべて既読にする", "ウィジェット", "更新間隔", "OPMLを読み込む", "OPMLを書き出す", "拡張機能")) { _, item ->
             when (item) {
                 0 -> markAllRead()
-                1 -> widgetsMenu(); 2 -> intervalDialog(); 3 -> launchImport(); 4 -> exportDocument.launch("stella-rss.opml")
+                1 -> widgetsMenu(); 2 -> intervalDialog(); 3 -> launchImport(); 4 -> exportDocument.launch("stella-rss.opml"); 5 -> spaceControls.extensions()
             }
         }.show()
     }
@@ -296,10 +323,27 @@ class MainActivity : Screen() {
         }
     }
 }
-private class ArticleAdapter(val screen: MainActivity) : ListAdapter<ArticleRow, ArticleAdapter.Holder>(object : DiffUtil.ItemCallback<ArticleRow>() {
+internal class ArticleAdapter(val screen: MainActivity) : ListAdapter<ArticleRow, ArticleAdapter.Holder>(object : DiffUtil.ItemCallback<ArticleRow>() {
     override fun areItemsTheSame(a: ArticleRow, b: ArticleRow) = a.article.id == b.article.id
     override fun areContentsTheSame(a: ArticleRow, b: ArticleRow) = a == b
 }) {
+    private var titles = emptyMap<String, String>()
+    fun showTitles(value: Map<String, String>) {
+        if (value == titles) return
+        val previous = titles
+        titles = value
+        // A translated title must not rebind every unread row (or restart image requests).
+        currentList.forEachIndexed { position, row ->
+            val article = row.article
+            if ((previous[article.id] ?: article.title) != (value[article.id] ?: article.title))
+                notifyItemChanged(position, "headline")
+        }
+    }
+    override fun onBindViewHolder(holder: Holder, position: Int, payloads: MutableList<Any>) {
+        if (payloads.isNotEmpty() && payloads.all { it == "headline" }) {
+            val row = getItem(position); holder.title.text = titles[row.article.id] ?: row.article.title
+        } else super.onBindViewHolder(holder, position, payloads)
+    }
     class Holder(val panel: LinearLayout, val image: ImageView, val source: TextView, val title: TextView, val summary: TextView) : RecyclerView.ViewHolder(panel) { var job: Job? = null; var articleId: String? = null }
     override fun onCreateViewHolder(parent: ViewGroup, type: Int): Holder {
         val panel = screen.column().apply { layoutParams = RecyclerView.LayoutParams(-1, -2); setBackgroundColor(0xFF0B1220.toInt()) }
@@ -324,7 +368,7 @@ private class ArticleAdapter(val screen: MainActivity) : ListAdapter<ArticleRow,
     }
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val row = getItem(position); holder.job?.cancel(); holder.articleId = row.article.id; holder.panel.tag = "article:${row.article.id}"
-        holder.title.text = row.article.title; holder.title.setTypeface(null, if (row.article.read) Typeface.NORMAL else Typeface.BOLD)
+        holder.title.text = titles[row.article.id] ?: row.article.title; holder.title.setTypeface(null, if (row.article.read) Typeface.NORMAL else Typeface.BOLD)
         holder.title.setTextColor(if (row.article.read) MUTED else INK)
         holder.source.text = "${if (row.article.bookmarked) "☆ " else if (!row.article.read) "• " else ""}${row.feedName} · ${DateUtils.getRelativeTimeSpanString(row.article.published)}"
         holder.source.setTextColor(if (row.article.read) MUTED else ACCENT)

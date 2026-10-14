@@ -1,3 +1,26 @@
+# 2026-10-14 — Foreground headlines and interaction polish
+
+- Displayed headlines are translated sequentially; no unread-wide queue or prefetch. Scroll changes and screen stop cancel pending work. Article and headline caches expire seven days after creation, without extending on read.
+- Missing language data no longer removes access to the original-headline display: Translation options offers both original display and explicit model preparation. Title payload updates target only changed rows, not the whole article list.
+- **65 JVM tests passed, 0 failures/errors/skips; lint 0 errors / 97 warnings; debug APK build passed**. Regression coverage includes TTL, cancellation, viewport limits, missing-model behavior, and per-row title updates in a 266-row list.
+- Debug APK SHA-256: `71d4539b7913e852e312ba3c5b5a8640b54536e422b3a2419696d4895c36530c` (0.3.3/code8). Foreground native interaction, actual translation quality and active-use battery impact remain separate verification; automated results do not establish those outcomes.
+- Installed on Sony SOG06/API34 with an in-place update; installed APK hash matches. Subscriptions, containers, widget settings and existing read/bookmark flags were retained. Launch returned `Status: ok`, but the device was locked, so foreground original/translation switching, scrolling, stopping and cache reuse remain unverified.
+- This checkpoint publishes source changes only; no version bump, release tag or APK release. Earlier dated entries below describe their own build-time verification limits.
+
+---
+
+# 2026-10-13 — optional reading containers and local translation (unreleased)
+
+- Containers are OFF by default under **⋮ → 拡張機能**. OFF merges the ordinary browsing library without deleting container organization; ON restores selection. Existing Room v1–v4 migrations preserve feeds, folders, memberships, article bodies, read/bookmarked flags and widget appearance into v5.
+- Container scoping is applied in SQL before LIMIT for article lists, widgets and bulk-read selection. Tests cover stale feed IDs after moves, saved/unread counts, empty/deleted scopes, folder-branch moves, duplicate OPML rollback, independent per-feed translation overrides and retained widget scope while the extension is OFF.
+- Local translation uses ML Kit translate 17.0.3 + bundled language-id 17.0.6. Tests use a fake provider to verify text-only/escaped transformation, structure and code retention, exact-source cache identity, bounded/corrupt cache handling, explicit model consent, Japanese/unknown-language refusal and resource closure on cancellation. These do **not** measure real ML Kit quality or memory.
+- Final full check: **57 JVM tests passed, 0 failures/errors/skips; lint 0 errors / 96 warnings; debug and AndroidTest APK builds passed**. The earlier new test incorrectly counted bookmarked articles as ordinary unread; corrected to preserve the existing Saved-inbox semantics. SDK transitive AppCompat lint incorrectly requested `app:tint` in four RemoteViews layouts; narrow `UseAppTint` annotations preserve the required framework `android:tint` without changing appearance. No blanket lint suppression.
+- Main APK SHA-256: `e1f355db7c07f563b67fdbd717cfde21f28f8dd52b619b1ae72b5d4eed14fbe5`; 74,101,706 bytes (debug, bundled SDK/native architectures, excluding later language downloads). AndroidTest APK: `1cc274dae57a562bc4fa9f2aef9224df0d1f02adbfb587703f900565111cbe91`.
+- **No device installation or native testing in this change.** Still unmeasured: first language-model download, actual offline translation, phone/desktop interaction and accessibility, translation latency, SDK/model storage, RSS process memory and battery. Model downloads are SDK-managed and may continue after the screen stops waiting. No runtime result from old RSS/Shell builds proves these new paths.
+- Version remains 0.3.3/code8 until a release is separately requested. Changes are local/uncommitted; no push, tag, Release or Shell runtime change.
+
+---
+
 # 2026-10-11 Stella RSS 0.3.3 — sidebar management and direct folder subscriptions
 
 - Replaced the large feed-card management list with a compact, searchable library tree and a single-subscription detail form. RSS/folder icons, muted counts, separate disclosure arrows, contextual edit/move/multiple-classification/delete, one top add entry; long-press drag retained.

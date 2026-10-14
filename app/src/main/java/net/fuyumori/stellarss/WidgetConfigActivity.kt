@@ -22,6 +22,7 @@ class WidgetConfigActivity : Screen() {
     private var allFeeds = true
     private var folderId: Long? = null
     private var sourceMode = 0
+    private var containerId: Long? = null
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setResult(RESULT_CANCELED)
@@ -31,6 +32,7 @@ class WidgetConfigActivity : Screen() {
         heading("ウィジェット設定", "このウィジェットだけに適用")
         lifecycleScope.launch {
             config = withContext(Dispatchers.IO) { rss.store.widget(widgetId) ?: WidgetConfig(widgetId) }
+            containerId = if (savedInstanceState?.containsKey("container") == true) savedInstanceState.getLong("container").takeIf { it > 0 } else config.containerId
             if (savedInstanceState != null) config = config.copy(feedIds = savedInstanceState.getString("feeds", config.feedIds),
                 folderId = if (savedInstanceState.containsKey("folder")) savedInstanceState.getLong("folder", -1).takeIf { it != -1L } else config.folderId,
                 background = savedInstanceState.getInt("bg", config.background), textColor = savedInstanceState.getInt("fg", config.textColor),
@@ -74,6 +76,24 @@ class WidgetConfigActivity : Screen() {
             unread = CheckBox(this@WidgetConfigActivity).apply { text = "未読記事のみ"; isChecked = config.unreadOnly; content.addView(this) }
             content.addView(label("ニュースの配信元", 22f, ACCENT))
             content.addView(label("フォルダは子孫を含み、後から追加したフィードにも追従します。フィード側の「ウィジェットにも表示」が有効なものが対象です。", 12f, MUTED))
+            val spacesEnabled = withContext(Dispatchers.IO) { ReadingSpaces(rss.db).state().enabled }
+            if (spacesEnabled) {
+                val containers = library.containers.toMutableList()
+                if (containerId != null && containers.none { it.id == containerId }) containers.add(NewsContainer(containerId!!, "削除されたコンテナ（表示は空）"))
+                content.addView(label("コンテナ", 16f, ACCENT))
+                content.addView(Spinner(this@WidgetConfigActivity).apply {
+                    adapter = ArrayAdapter(this@WidgetConfigActivity, android.R.layout.simple_spinner_dropdown_item,
+                        listOf("すべてのコンテナ") + containers.map { it.name })
+                    setSelection(containers.indexOfFirst { it.id == containerId } + 1)
+                    onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                        override fun onItemSelected(parent: AdapterView<*>?, view: android.view.View?, position: Int, id: Long) {
+                            containerId = containers.getOrNull(position - 1)?.id
+                        }
+                        override fun onNothingSelected(parent: AdapterView<*>?) {}
+                    }
+                })
+                content.addView(label("以下のフィード・フォルダ選択も、このコンテナ内だけが対象になります。", 12f, MUTED))
+            }
             val modes = Spinner(this@WidgetConfigActivity).apply {
                 adapter = ArrayAdapter(this@WidgetConfigActivity, android.R.layout.simple_spinner_dropdown_item, listOf("全フィード", "フィードを選択", "フォルダを選択"))
                 setSelection(sourceMode)
@@ -147,14 +167,14 @@ class WidgetConfigActivity : Screen() {
             require(Regex("#[0-9a-fA-F]{6}").matches(text.trim())) { "色は #RRGGBB の6桁で入力してください" }
             return Color.parseColor(text.trim())
         }
-        return config.copy(folderId = if (sourceMode == 2) folderId else null,
+        return config.copy(containerId = containerId, folderId = if (sourceMode == 2) folderId else null,
             feedIds = if (sourceMode == 1) selected.sorted().joinToString(",") else "", background = color(backgroundField.text.toString()),
             textColor = color(foregroundField.text.toString()), opacity = alpha.progress, fontSp = font.progress + 12,
             images = images.isChecked, unreadOnly = unread.isChecked, cornerDp = corners.progress * 8)
     }
     override fun onSaveInstanceState(outState: Bundle) {
         if (::font.isInitialized) runCatching { readConfig() }.getOrNull()?.let {
-            outState.putLong("folder", it.folderId ?: -1); outState.putString("feeds", it.feedIds); outState.putInt("bg", it.background); outState.putInt("fg", it.textColor)
+            outState.putLong("container", it.containerId ?: -1); outState.putLong("folder", it.folderId ?: -1); outState.putString("feeds", it.feedIds); outState.putInt("bg", it.background); outState.putInt("fg", it.textColor)
             outState.putInt("opacity", it.opacity); outState.putInt("font", it.fontSp); outState.putBoolean("images", it.images); outState.putBoolean("unread", it.unreadOnly)
             outState.putInt("corners", it.cornerDp)
         }

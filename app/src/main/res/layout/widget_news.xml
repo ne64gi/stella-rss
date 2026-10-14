@@ -1,5 +1,6 @@
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent">
- <ImageView android:id="@android:id/background" android:clipToOutline="true" android:outlineProvider="bounds" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_background_16" android:tint="#242629" android:scaleType="fitXY" android:importantForAccessibility="no"/>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools" android:id="@+id/widget_root" android:layout_width="match_parent" android:layout_height="match_parent">
+ <!-- RemoteViews inflate framework ImageView, not AppCompat; android:tint is intentional. -->
+ <ImageView tools:ignore="UseAppTint" android:id="@android:id/background" android:clipToOutline="true" android:outlineProvider="bounds" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_background_16" android:tint="#242629" android:scaleType="fitXY" android:importantForAccessibility="no"/>
  <ImageView android:id="@+id/widget_border" android:layout_width="match_parent" android:layout_height="match_parent" android:src="@drawable/widget_border_16" android:visibility="gone" android:scaleType="fitXY" android:importantForAccessibility="no"/>
  <LinearLayout android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="10dp">
   <LinearLayout android:layout_width="match_parent" android:layout_height="28dp" android:gravity="center_vertical">

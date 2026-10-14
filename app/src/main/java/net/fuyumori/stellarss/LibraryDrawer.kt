@@ -125,11 +125,12 @@ class LibraryDrawer(private val screen: MainActivity, private val select: (Strin
     }
     private fun folderMenu(id: Long) {
         val item = library.folders.firstOrNull { it.id == id } ?: return
-        AlertDialog.Builder(screen).setTitle(library.path(item)).setItems(arrayOf("このフォルダにフィードを追加", "子フォルダを追加", "名前を変更", "フォルダを移動", "フォルダを削除")) { _, which ->
+        AlertDialog.Builder(screen).setTitle(library.path(item)).setItems(arrayOf("このフォルダにフィードを追加", "子フォルダを追加", "名前を変更", "フォルダを移動", "フォルダを削除").toList().let { if (screen.containersEnabled) it + "別のコンテナへ移動" else it }.toTypedArray()) { _, which ->
             when (which) {
                 0 -> addFeed(id); 1 -> editFolder(null, id); 2 -> editFolder(item, null)
+                5 -> screen.moveToContainer(id, true)
                 3 -> {
-                    val targets = library.sortedPaths().filter { it.id !in library.descendants(id) }
+                    val targets = library.sortedPaths().filter { it.containerId == item.containerId && it.id !in library.descendants(id) }
                     AlertDialog.Builder(screen).setTitle("移動先").setItems((listOf("最上位") + targets.map { library.path(it) }).toTypedArray()) { _, pos ->
                         change { organization.saveFolder(id, item.name, targets.getOrNull(pos - 1)?.id) }
                     }.show()
@@ -143,18 +144,19 @@ class LibraryDrawer(private val screen: MainActivity, private val select: (Strin
     private fun feedMenu(id: Long, from: Long?) {
         val feed = library.feeds.firstOrNull { it.id == id } ?: return
         AlertDialog.Builder(screen).setTitle(feed.name)
-            .setItems(arrayOf("編集・表示設定", "フォルダへ移動", "分類を選択（複数可）", "削除")) { _, which ->
+            .setItems(arrayOf("編集・表示設定", "フォルダへ移動", "分類を選択（複数可）", "削除").toList().let { if (screen.containersEnabled) it + "別のコンテナへ移動" else it }.toTypedArray()) { _, which ->
                 when (which) {
                     0 -> screen.startActivity(Intent(screen, FeedActivity::class.java).putExtra("edit", id))
+                    4 -> screen.moveToContainer(id, false)
                     1 -> {
-                        val folders = library.sortedPaths()
+                        val folders = library.sortedPaths().filter { it.containerId == feed.containerId }
                         AlertDialog.Builder(screen).setTitle("移動先（ほかの分類は維持）")
                             .setItems((listOf("未分類（すべての分類を外す）") + folders.map { library.path(it) }).toTypedArray()) { _, index ->
                                 change { organization.moveFeed(id, from, folders.getOrNull(index - 1)?.id) }
                             }.show()
                     }
                     2 -> {
-                        val folders = library.sortedPaths()
+                        val folders = library.sortedPaths().filter { it.containerId == feed.containerId }
                         if (folders.isEmpty()) { screen.toast("＋からフォルダを作成してください"); return@setItems }
                         val selected = library.links.filter { it.feedId == id }.map { it.folderId }.toMutableSet()
                         AlertDialog.Builder(screen).setTitle("分類を選択")

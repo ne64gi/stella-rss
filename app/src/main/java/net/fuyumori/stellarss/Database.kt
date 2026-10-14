@@ -6,7 +6,7 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "feeds", indices = [Index(value = ["url"], unique = true)])
+@Entity(tableName = "feeds", indices = [Index(value = ["url"], unique = true), Index("containerId")])
 data class Feed(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val name: String = "", val url: String,
@@ -14,7 +14,9 @@ data class Feed(
     val showImages: Boolean = true, val showSummary: Boolean = true,
     val etag: String? = null, val modified: String? = null,
     val lastChecked: Long = 0, val error: String? = null,
-    @ColumnInfo(defaultValue = "0") val contentVersion: Int = 0
+    @ColumnInfo(defaultValue = "0") val contentVersion: Int = 0,
+    @ColumnInfo(defaultValue = "1") val containerId: Long = 1,
+    val translationTarget: String? = null
 )
 @Entity(tableName = "articles", foreignKeys = [ForeignKey(entity = Feed::class, parentColumns = ["id"],
     childColumns = ["feedId"], onDelete = ForeignKey.CASCADE)], indices = [Index("feedId"), Index("published")])
@@ -31,7 +33,7 @@ data class WidgetConfig(@PrimaryKey val id: Int, val feedIds: String = "", val b
                         val opacity: Int = 98, val textColor: Int = 0xFFF5F5F5.toInt(), val fontSp: Int = 15,
                         val images: Boolean = true, val unreadOnly: Boolean = false,
                         @ColumnInfo(defaultValue = "16") val cornerDp: Int = 16,
-                        val folderId: Long? = null) {
+                        val folderId: Long? = null, val containerId: Long? = null) {
     fun selectedFeeds() = feedIds.split(",").mapNotNull { it.toLongOrNull() }.toSet()
 }
 @Entity(tableName = "preferences")
@@ -39,8 +41,12 @@ data class Preference(@PrimaryKey val key: String, val value: String)
 data class ArticleRow(@Embedded val article: Article, val feedName: String, val showImages: Boolean, val showSummary: Boolean)
 
 @Entity(tableName = "folders", foreignKeys = [ForeignKey(entity = Folder::class, parentColumns = ["id"],
-    childColumns = ["parentId"], onDelete = ForeignKey.CASCADE)], indices = [Index("parentId")])
-data class Folder(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name: String, val parentId: Long? = null)
+    childColumns = ["parentId"], onDelete = ForeignKey.CASCADE)], indices = [Index("parentId"), Index("containerId")])
+data class Folder(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name: String, val parentId: Long? = null,
+                  @ColumnInfo(defaultValue = "1") val containerId: Long = 1)
+@Entity(tableName = "containers")
+data class NewsContainer(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name: String,
+                         @ColumnInfo(defaultValue = "''") val translationTarget: String = "")
 @Entity(tableName = "folder_feed", primaryKeys = ["folderId", "feedId"], foreignKeys = [
     ForeignKey(entity = Folder::class, parentColumns = ["id"], childColumns = ["folderId"], onDelete = ForeignKey.CASCADE),
     ForeignKey(entity = Feed::class, parentColumns = ["id"], childColumns = ["feedId"], onDelete = ForeignKey.CASCADE)
@@ -53,6 +59,15 @@ private const val LIST_COLUMNS = "articles.id, articles.feedId, articles.title, 
 
 @Dao
 interface Store {
+    @Query("SELECT * FROM containers ORDER BY id") fun watchContainers(): Flow<List<NewsContainer>>
+    @Query("SELECT * FROM containers ORDER BY id") suspend fun containers(): List<NewsContainer>
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun add(container: NewsContainer): Long
+    @Update suspend fun update(container: NewsContainer)
+    @Query("DELETE FROM containers WHERE id=:id") suspend fun deleteContainer(id: Long)
+    @Query("UPDATE feeds SET containerId=:containerId WHERE id=:id") suspend fun moveFeedContainer(id: Long, containerId: Long)
+    @Query("SELECT value FROM preferences WHERE `key`=:key") fun watchPreference(key: String): Flow<String?>
+    @Query("SELECT feedId, COUNT(*) AS count FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND bookmarked=1 GROUP BY feedId")
+    fun watchSavedCounts(): Flow<List<FeedUnread>>
     @Query("SELECT * FROM folders ORDER BY name COLLATE NOCASE, id") fun watchFolders(): Flow<List<Folder>>
     @Query("SELECT * FROM folders ORDER BY name COLLATE NOCASE, id") suspend fun folders(): List<Folder>
     @Insert suspend fun add(folder: Folder): Long
@@ -68,8 +83,8 @@ interface Store {
     @Query("SELECT COUNT(*) FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND bookmarked=1")
     fun watchSavedCount(): Flow<Int>
     @Query("UPDATE articles SET bookmarked=:saved WHERE id=:id") suspend fun bookmark(id: String, saved: Boolean)
-    @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:unread=0 OR read=0) AND bookmarked=:saved ORDER BY published DESC, articles.id LIMIT 1000")
-    fun watchSelection(ids: List<Long>, allFeeds: Boolean, unread: Boolean, saved: Boolean): Flow<List<ArticleRow>>
+    @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:containerId IS NULL OR feeds.containerId=:containerId) AND (:unread=0 OR read=0) AND bookmarked=:saved ORDER BY published DESC, articles.id LIMIT 1000")
+    fun watchSelection(ids: List<Long>, allFeeds: Boolean, unread: Boolean, saved: Boolean, containerId: Long? = null): Flow<List<ArticleRow>>
     @Query("SELECT * FROM feeds ORDER BY id") fun watchFeeds(): Flow<List<Feed>>
     @Query("SELECT * FROM feeds ORDER BY id") suspend fun feeds(): List<Feed>
     @Query("SELECT * FROM feeds WHERE id=:id") suspend fun feed(id: Long): Feed?
@@ -89,8 +104,8 @@ interface Store {
     @Query("UPDATE articles SET title=:title,url=:url,summary=:summary,published=:published,imageCandidates=:candidates WHERE id=:id")
     suspend fun updateContent(id: String, title: String, url: String, summary: String, published: Long, candidates: String)
     @Query("UPDATE articles SET read=:read WHERE id=:id") suspend fun markRead(id: String, read: Boolean)
-    @Query("SELECT articles.id FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND read=0 AND (:allFeeds=1 OR feedId IN (:ids)) AND bookmarked=:saved")
-    suspend fun unreadIds(ids: List<Long>, allFeeds: Boolean, saved: Boolean): List<String>
+    @Query("SELECT articles.id FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND read=0 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:containerId IS NULL OR feeds.containerId=:containerId) AND bookmarked=:saved")
+    suspend fun unreadIds(ids: List<Long>, allFeeds: Boolean, saved: Boolean, containerId: Long? = null): List<String>
     @Query("UPDATE articles SET read=:read WHERE id IN (:ids)") suspend fun markRead(ids: List<String>, read: Boolean)
     @Query("UPDATE articles SET imageUrl=:url,imageChecked=:checked WHERE id=:id") suspend fun setImage(id: String, url: String?, checked: Long)
     @Query("UPDATE articles SET imageUrl=:url,imageChecked=:checked WHERE id=:id AND imageCandidates=:candidates AND url=:articleUrl")
@@ -101,8 +116,8 @@ interface Store {
     fun watchArticles(): Flow<List<ArticleRow>>
     @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND feeds.inWidgets=1 ORDER BY published DESC, articles.id LIMIT 1000")
     suspend fun widgetArticles(): List<ArticleRow>
-    @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND feeds.inWidgets=1 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:unread=0 OR read=0) ORDER BY published DESC, articles.id LIMIT 5")
-    suspend fun widgetArticlesFor(ids: List<Long>, allFeeds: Boolean, unread: Boolean): List<ArticleRow>
+    @Query("SELECT " + LIST_COLUMNS + ", feeds.name AS feedName, feeds.showImages, feeds.showSummary FROM articles JOIN feeds ON feeds.id=articles.feedId WHERE feeds.enabled=1 AND feeds.inWidgets=1 AND (:allFeeds=1 OR feedId IN (:ids)) AND (:containerId IS NULL OR feeds.containerId=:containerId) AND (:unread=0 OR read=0) ORDER BY published DESC, articles.id LIMIT 5")
+    suspend fun widgetArticlesFor(ids: List<Long>, allFeeds: Boolean, unread: Boolean, containerId: Long? = null): List<ArticleRow>
     @Query("SELECT * FROM articles WHERE feedId=:id ORDER BY published DESC LIMIT 60") suspend fun recent(id: Long): List<Article>
     @Query("DELETE FROM articles WHERE feedId=:id AND read=1 AND bookmarked=0 AND id NOT IN (SELECT id FROM articles WHERE feedId=:id ORDER BY published DESC LIMIT 500)")
     suspend fun trimRead(id: Long)
@@ -114,10 +129,22 @@ interface Store {
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun save(pref: Preference)
     @Query("DELETE FROM preferences WHERE `key`=:key") suspend fun deletePreference(key: String)
 }
-@Database(entities = [Feed::class, Article::class, WidgetConfig::class, Preference::class, Folder::class, FolderFeed::class], version = 4, exportSchema = true)
+@Database(entities = [Feed::class, Article::class, WidgetConfig::class, Preference::class, Folder::class, FolderFeed::class, NewsContainer::class], version = 5, exportSchema = true)
 abstract class RssDatabase : RoomDatabase() {
     abstract fun store(): Store
     companion object {
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS containers (id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, name TEXT NOT NULL, translationTarget TEXT NOT NULL DEFAULT '')")
+                db.execSQL("INSERT INTO containers (id,name,translationTarget) VALUES (1,'デフォルト','')")
+                db.execSQL("ALTER TABLE feeds ADD COLUMN containerId INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("ALTER TABLE feeds ADD COLUMN translationTarget TEXT")
+                db.execSQL("CREATE INDEX index_feeds_containerId ON feeds(containerId)")
+                db.execSQL("ALTER TABLE folders ADD COLUMN containerId INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("CREATE INDEX index_folders_containerId ON folders(containerId)")
+                db.execSQL("ALTER TABLE widgets ADD COLUMN containerId INTEGER")
+            }
+        }
         val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE articles ADD COLUMN bodyHtml TEXT NOT NULL DEFAULT ''")
@@ -147,7 +174,12 @@ abstract class RssDatabase : RoomDatabase() {
         @Volatile private var instance: RssDatabase? = null
         fun get(context: Context): RssDatabase = instance ?: synchronized(this) {
             instance ?: Room.databaseBuilder(context.applicationContext, RssDatabase::class.java, "stellarss.db")
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addCallback(object : Callback() {
+                    override fun onCreate(db: SupportSQLiteDatabase) {
+                        db.execSQL("INSERT OR IGNORE INTO containers (id,name,translationTarget) VALUES (1,'デフォルト','')")
+                    }
+                }).build().also { instance = it }
         }
     }
 }
